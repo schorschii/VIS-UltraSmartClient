@@ -1,0 +1,1 @@
+"""VIS UltraSmartClient desktop application."""

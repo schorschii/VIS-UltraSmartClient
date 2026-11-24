@@ -1,0 +1,13 @@
+Package: ultrasmartclient
+Version: @VERSION@
+Section: office
+Priority: optional
+Architecture: all
+Maintainer: UltraSmartClient maintainers
+Depends: python3 (>= 3.10), python3-pyqt6 (>= 6.6), python3-requests, python3-requests-gssapi, python3-gssapi, python3-defusedxml, libqt6svg6
+Recommends: krb5-user, qt6-translations-l10n
+Installed-Size: @INSTALLED_SIZE@
+Description: VIS UltraSmartClient desktop application
+ PyQt6 desktop client for VIS with Kerberos authentication,
+ object management, workflow tasks, and document access.
+ Uses the distribution's Python packages without a virtual environment.

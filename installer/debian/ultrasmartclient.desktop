@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VIS UltraSmartClient
+Comment=VIS document and workflow client
+Exec=ultrasmartclient
+Icon=ultrasmartclient
+Terminal=false
+Categories=Office;
+StartupNotify=true
