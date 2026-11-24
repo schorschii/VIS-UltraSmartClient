@@ -15,6 +15,8 @@ from .theme import ThemeManager
 def main():
     parser = argparse.ArgumentParser(description='VIS UltraSmartClient')
     parser.add_argument('--smoke-test', action='store_true')
+    parser.add_argument('--demo', action='store_true',
+                        help='Hauptfenster mit Beispieldaten ohne Serververbindung starten')
     parser.add_argument('--debug', action='store_true',
                         help='SOAP-Anfragen und -Antworten auf stdout ausgeben')
     args, qt_args = parser.parse_known_args()
@@ -28,7 +30,7 @@ def main():
     # Keep Qt's platform-selected style for native controls such as scrollbars.
     app.theme_manager = ThemeManager(app)
     app.setStyleSheet(STYLE)
-    if not args.smoke_test:
+    if not args.smoke_test and not args.demo:
         app.setQuitOnLastWindowClosed(False)
         try:
             selector = TenantSelector(initial_url=os.environ.get('VIS_SERVER_URL'))
@@ -38,7 +40,11 @@ def main():
         startup = LoginStartup(app, selector=selector)
         selector.show()
         return app.exec()
-    window = Client()
+    if args.demo:
+        from .demo import create_demo_window
+        window = create_demo_window()
+    else:
+        window = Client()
     window.show()
     result = [0]
     if args.smoke_test:
