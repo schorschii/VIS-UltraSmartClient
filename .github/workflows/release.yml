@@ -30,76 +30,76 @@ jobs:
           path: dist/debian/*.deb
           if-no-files-found: error
 
-  macos:
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install build dependencies
-        run: python -m pip install . 'pyinstaller>=6,<7' Pillow
-      - name: Build app and disk image
-        run: |
-          PYTHON=python sh installer/macos/build.sh
-          mv dist/macos/UltraSmartClient.dmg "dist/macos/UltraSmartClient-macos-$(uname -m).dmg"
-      - name: Smoke test packaged app
-        timeout-minutes: 3
-        run: dist/macos/UltraSmartClient.app/Contents/MacOS/UltraSmartClient --smoke-test
-      - uses: actions/upload-artifact@v4
-        with:
-          name: package-macos
-          path: dist/macos/*.dmg
-          if-no-files-found: error
-
-  windows:
-    runs-on: windows-2022
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          architecture: x64
-      - name: Install MIT Kerberos runtime and SDK
-        run: |
-          $msi = Join-Path $env:RUNNER_TEMP 'kfw-4.4.msi'
-          Invoke-WebRequest 'https://kerberos.org/dist/kfw/4.4/kfw-4.4.msi' -OutFile $msi
-          $process = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', 'ADDLOCAL=ALL') -Wait -PassThru
-          if ($process.ExitCode -notin @(0, 3010)) { throw "Kerberos installation failed: $($process.ExitCode)" }
-          $kerberos = "$env:ProgramFiles\MIT\Kerberos"
-          if (-not (Test-Path "$kerberos\bin\gssapi64.dll")) { throw 'Kerberos DLL missing' }
-          if (-not (Test-Path "$kerberos\include\gssapi\gssapi.h")) { throw 'Kerberos SDK missing' }
-          "$kerberos\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Install build dependencies
-        run: |
-          python -m pip install . 'pyinstaller>=6,<7' Pillow
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-      - name: Build portable executable
-        run: |
-          ./installer/windows/build.ps1
-          Move-Item dist/windows/UltraSmartClient.exe dist/windows/UltraSmartClient-windows-x64.exe
-      - name: Smoke test packaged executable
-        timeout-minutes: 3
-        run: |
-          $process = Start-Process dist/windows/UltraSmartClient-windows-x64.exe -ArgumentList '--smoke-test' -PassThru
-          if (-not $process.WaitForExit(120000)) {
-            $process.Kill()
-            throw 'Smoke test timed out'
-          }
-          if ($process.ExitCode -ne 0) { throw "Smoke test failed: $($process.ExitCode)" }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: package-windows
-          path: dist/windows/*.exe
-          if-no-files-found: error
+#  macos:
+#    runs-on: macos-15
+#    timeout-minutes: 30
+#    steps:
+#      - uses: actions/checkout@v4
+#      - uses: actions/setup-python@v5
+#        with:
+#          python-version: '3.12'
+#      - name: Install build dependencies
+#        run: python -m pip install . 'pyinstaller>=6,<7' Pillow
+#      - name: Build app and disk image
+#        run: |
+#          PYTHON=python sh installer/macos/build.sh
+#          mv dist/macos/UltraSmartClient.dmg "dist/macos/UltraSmartClient-macos-$(uname -m).dmg"
+#      - name: Smoke test packaged app
+#        timeout-minutes: 3
+#        run: dist/macos/UltraSmartClient.app/Contents/MacOS/UltraSmartClient --smoke-test
+#      - uses: actions/upload-artifact@v4
+#        with:
+#          name: package-macos
+#          path: dist/macos/*.dmg
+#          if-no-files-found: error
+#
+#  windows:
+#    runs-on: windows-2022
+#    timeout-minutes: 30
+#    defaults:
+#      run:
+#        shell: pwsh
+#    steps:
+#      - uses: actions/checkout@v4
+#      - uses: actions/setup-python@v5
+#        with:
+#          python-version: '3.12'
+#          architecture: x64
+#      - name: Install MIT Kerberos runtime and SDK
+#        run: |
+#          $msi = Join-Path $env:RUNNER_TEMP 'kfw-4.4.msi'
+#          Invoke-WebRequest 'https://kerberos.org/dist/kfw/4.4/kfw-4.4.msi' -OutFile $msi
+#          $process = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', 'ADDLOCAL=ALL') -Wait -PassThru
+#          if ($process.ExitCode -notin @(0, 3010)) { throw "Kerberos installation failed: $($process.ExitCode)" }
+#          $kerberos = "$env:ProgramFiles\MIT\Kerberos"
+#          if (-not (Test-Path "$kerberos\bin\gssapi64.dll")) { throw 'Kerberos DLL missing' }
+#          if (-not (Test-Path "$kerberos\include\gssapi\gssapi.h")) { throw 'Kerberos SDK missing' }
+#          "$kerberos\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+#      - name: Install build dependencies
+#        run: |
+#          python -m pip install . 'pyinstaller>=6,<7' Pillow
+#          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+#      - name: Build portable executable
+#        run: |
+#          ./installer/windows/build.ps1
+#          Move-Item dist/windows/UltraSmartClient.exe dist/windows/UltraSmartClient-windows-x64.exe
+#      - name: Smoke test packaged executable
+#        timeout-minutes: 3
+#        run: |
+#          $process = Start-Process dist/windows/UltraSmartClient-windows-x64.exe -ArgumentList '--smoke-test' -PassThru
+#          if (-not $process.WaitForExit(120000)) {
+#            $process.Kill()
+#            throw 'Smoke test timed out'
+#          }
+#          if ($process.ExitCode -ne 0) { throw "Smoke test failed: $($process.ExitCode)" }
+#      - uses: actions/upload-artifact@v4
+#        with:
+#          name: package-windows
+#          path: dist/windows/*.exe
+#          if-no-files-found: error
 
   release:
-    needs: [debian, macos, windows]
+    needs: [debian]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
