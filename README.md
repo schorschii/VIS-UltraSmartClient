@@ -2,6 +2,11 @@
 
 Ein ultra-smarter Desktop-Client für VIS - endlich schnell und plattformübergreifend!
 
+- gewohnt einfache, aber performante & plattformübergreifende Oberfläche
+- Dark-Mode
+- Kerberos-Authentifizierung
+- verwendet die VAPI
+
 ![Hauptfenster Light Mode](.github/1.png)
 ![Hauptfenster Dark Mode](.github/2.png)
 
@@ -25,13 +30,6 @@ python3 -m ultrasmartclient --demo
 ```
 
 Öffnet das Hauptfenster ohne Anmeldung und Serververbindung mit fiktiven Dokumenten, Metadaten, Anlagen, Aufgaben und Wiedervorlagen. Die Dokumente lassen sich im Baum auswählen; die Suche filtert den Baum. Serveraktionen sind in diesem Modus nicht verfügbar.
-
-## Funktionen
-
-- gewohnt einfache, aber performante & plattformübergreifende Oberfläche
-- Dark-Mode
-- Kerberos-Authentifizierung
-- verwendet die VAPI
 
 ## Offscreen-Prüfung
 
