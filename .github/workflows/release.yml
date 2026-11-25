@@ -100,7 +100,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [debian]
+    needs: [debian, macos, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
