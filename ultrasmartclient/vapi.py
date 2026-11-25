@@ -625,6 +625,44 @@ class VapiClient:
                 '$orderby': 'Reihenfolge'})
         return entries
 
+    def add_favorite(self, object_id, name, parent_favorite_id=0, position=-1):
+        payload = f'''<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="{SOAP}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body>
+    <AddBOFavorite xmlns="{SERVICE}">
+      <obj_id xmlns="">{int(object_id)}</obj_id>
+      <name xmlns="">{escape(str(name))}</name>
+      <position xmlns="">{int(position)}</position>
+      <parent_fav_id xmlns="">{int(parent_favorite_id)}</parent_fav_id>
+    </AddBOFavorite>
+  </soap:Body>
+</soap:Envelope>'''.encode('utf-8')
+        parse_soap_body(self.soap_request('Favorites', payload))
+
+    def create_favorite_folder(self, name, parent_favorite_id=0, position=-1):
+        payload = f'''<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="{SOAP}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body>
+    <CreateFolder xmlns="{SERVICE}">
+      <name xmlns="">{escape(str(name))}</name>
+      <position xmlns="">{int(position)}</position>
+      <parent_fav_id xmlns="">{int(parent_favorite_id)}</parent_fav_id>
+    </CreateFolder>
+  </soap:Body>
+</soap:Envelope>'''.encode('utf-8')
+        parse_soap_body(self.soap_request('Favorites', payload))
+
+    def delete_favorite(self, favorite_id):
+        payload = f'''<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="{SOAP}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body>
+    <Delete xmlns="{SERVICE}">
+      <fav_id xmlns="">{int(favorite_id)}</fav_id>
+    </Delete>
+  </soap:Body>
+</soap:Envelope>'''.encode('utf-8')
+        parse_soap_body(self.soap_request('Favorites', payload))
+
     def _favorite_entries(self, endpoint, params):
         url = endpoint + '?' + urlencode(params, quote_via=quote, safe='$,()')
         entries, seen = [], set()

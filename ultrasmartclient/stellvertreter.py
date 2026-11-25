@@ -88,7 +88,7 @@ class StellvertreterManagementDialog(QDialog):
             return
         self.entries.selectRow(item.row())
         menu = QMenu(self)
-        delete = menu.addAction('Löschen')
+        delete = menu.addAction('Entfernen')
         delete.setEnabled(item.data(Qt.ItemDataRole.UserRole) is not None)
         if menu.exec(self.entries.viewport().mapToGlobal(position)) == delete and delete.isEnabled():
             self.request(self.api.delete_stellvertreter,

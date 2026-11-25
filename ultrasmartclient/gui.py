@@ -1344,11 +1344,145 @@ class Client(QMainWindow):
         else:
             self.navigate_content(entry, [])
 
+    def selected_favorite_folder(self):
+        """Return the selected favorite folder item, or the folder containing the selected favorite."""
+        # The current item survives deselection (Ctrl+click, click on empty space); only honour a real selection.
+        selected = self.favorites.selectedItems()
+        return self.favorite_folder_of(selected[0] if selected else None)
+
+    def add_favorite(self):
+        entry = self._current_entry
+        if self.api is None or not entry or entry.get('id') is None:
+            self.statusBar().showMessage('Bitte zuerst ein VIS-Objekt öffnen.')
+            return
+        if getattr(self, '_add_favorite_worker', None) is not None:
+            return
+        folder = self.selected_favorite_folder()
+        parent_id = folder.data(0, Qt.ItemDataRole.UserRole)['favorite_id'] if folder is not None else 0
+        worker = WorkflowWorker()
+        self._add_favorite_worker = worker
+        token = self._favorite_token
+        worker.finished.connect(lambda _result, error: self.add_favorite_finished(entry['name'], folder, token, error))
+        self.statusBar().showMessage('Favorit wird hinzugefügt: ' + entry['name'])
+        threading.Thread(target=worker.run,
+                         args=(self.api, 'add_favorite', (entry['id'], entry['name'], parent_id)),
+                         daemon=True).start()
+
+    def add_favorite_finished(self, name, folder, token, error):
+        self._add_favorite_worker = None
+        if error:
+            self.statusBar().showMessage('Favorit konnte nicht hinzugefügt werden: ' + error.strip().splitlines()[-1])
+            return
+        self.statusBar().showMessage('Als Favorit hinzugefügt: ' + name)
+        self.reload_favorite_folder(folder, token)
+
+    def reload_favorite_folder(self, folder, token):
+        """Reload a favorite folder (or the whole tree) after it changed on the server."""
+        if folder is None or token != self._favorite_token:
+            self.refresh_favorites()
+        elif folder.data(0, Qt.ItemDataRole.UserRole + 1) != 'loading':
+            folder.takeChildren()
+            folder.setData(0, Qt.ItemDataRole.UserRole + 1, None)
+            folder.setExpanded(True)
+            self.refresh_favorites(folder)
+
     def favorites_context_menu(self, position):
         menu = QMenu(self)
+        item = self.favorites.itemAt(position)
+        remove_action = folder_action = None
+        if self.api is not None:
+            folder_action = menu.addAction('Neuer Favoritenordner …')
+            folder_action.setEnabled(getattr(self, '_create_folder_worker', None) is None)
+        if item is not None and self.api is not None:
+            remove_action = menu.addAction('Aus Favoriten entfernen')
+            remove_action.setEnabled(getattr(self, '_remove_favorite_worker', None) is None)
+        if self.api is not None:
+            menu.addSeparator()
         reload_action = menu.addAction('Favoriten aktualisieren')
-        if menu.exec(self.favorites.viewport().mapToGlobal(position)) == reload_action:
+        chosen = menu.exec(self.favorites.viewport().mapToGlobal(position))
+        if chosen is None:
+            return
+        if chosen == reload_action:
             self.refresh_favorites()
+        elif chosen == remove_action:
+            self.remove_favorite(item)
+        elif chosen == folder_action:
+            self.create_favorite_folder(item)
+
+    def favorite_folder_of(self, item):
+        """Return the folder item itself, or the folder containing the given favorite."""
+        while item is not None:
+            entry = item.data(0, Qt.ItemDataRole.UserRole)
+            if entry and entry.get('folder'):
+                return item
+            item = item.parent()
+        return None
+
+    def create_favorite_folder(self, item=None):
+        if self.api is None or getattr(self, '_create_folder_worker', None) is not None:
+            return
+        folder = self.favorite_folder_of(item)
+        name, accepted = QInputDialog.getText(self, 'Neuer Favoritenordner', 'Name des Ordners:')
+        name = name.strip()
+        if not accepted or not name:
+            return
+        parent_id = folder.data(0, Qt.ItemDataRole.UserRole)['favorite_id'] if folder is not None else 0
+        worker = WorkflowWorker()
+        self._create_folder_worker = worker
+        token = self._favorite_token
+        worker.finished.connect(lambda _result, error: self.create_favorite_folder_finished(name, folder, token, error))
+        self.statusBar().showMessage('Favoritenordner wird angelegt: ' + name)
+        threading.Thread(target=worker.run, args=(self.api, 'create_favorite_folder', (name, parent_id)),
+                         daemon=True).start()
+
+    def create_favorite_folder_finished(self, name, folder, token, error):
+        self._create_folder_worker = None
+        if error:
+            self.statusBar().showMessage('Favoritenordner konnte nicht angelegt werden: '
+                                         + error.strip().splitlines()[-1])
+            return
+        self.statusBar().showMessage('Favoritenordner angelegt: ' + name)
+        self.reload_favorite_folder(folder, token)
+
+    def remove_favorite(self, item):
+        entry = item.data(0, Qt.ItemDataRole.UserRole)
+        if self.api is None or not entry or getattr(self, '_remove_favorite_worker', None) is not None:
+            return
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle('Favorit entfernen')
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        kind = 'Den Favoritenordner' if entry['folder'] else 'Den Favoriten'
+        dialog.setText(f'{kind} „{entry["name"]}“ aus den Favoriten entfernen?')
+        if entry['folder']:
+            dialog.setInformativeText('Enthaltene Favoriten werden ebenfalls entfernt.')
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        if dialog.exec() != QMessageBox.StandardButton.Yes:
+            return
+        worker = WorkflowWorker()
+        self._remove_favorite_worker = worker
+        token = self._favorite_token
+        worker.finished.connect(lambda _result, error: self.remove_favorite_finished(item, entry, token, error))
+        self.statusBar().showMessage('Favorit wird entfernt: ' + entry['name'])
+        threading.Thread(target=worker.run, args=(self.api, 'delete_favorite', (entry['favorite_id'],)),
+                         daemon=True).start()
+
+    def remove_favorite_finished(self, item, entry, token, error):
+        self._remove_favorite_worker = None
+        if error:
+            self.statusBar().showMessage('Favorit konnte nicht entfernt werden: ' + error.strip().splitlines()[-1])
+            return
+        self.statusBar().showMessage('Aus Favoriten entfernt: ' + entry['name'])
+        if token != self._favorite_token:
+            # The tree was reloaded meanwhile and may still list the removed entry.
+            self.refresh_favorites()
+            return
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+        else:
+            self.favorites.takeTopLevelItem(self.favorites.indexOfTopLevelItem(item))
 
     def activate_history(self, item):
         entry = item.data(Qt.ItemDataRole.UserRole)
@@ -1869,7 +2003,6 @@ class Client(QMainWindow):
         groups = [
             [
                 ('Navigation', [
-                    ('Als Favorit', 'favorite', 'ribbon-favorite.svg'),
                     ('Suchen', 'search', 'ribbon-search.svg'),
                     ('Stellvertreterverwaltung', 'stellvertreter-management', 'ribbon-stellvertreter.svg')
                 ])
@@ -3095,7 +3228,7 @@ class Client(QMainWindow):
                 except OSError as error:
                     QMessageBox.warning(self, 'Speichern fehlgeschlagen', str(error))
         elif action == 'favorite':
-            self.statusBar().showMessage('Favoriten werden vom Server gelesen. Bitte im VIS-Webclient bearbeiten.')
+            self.add_favorite()
         elif action == 'search':
             self.search.setFocus()
         elif action == 'unlock':
