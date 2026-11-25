@@ -5,7 +5,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt, QSize, QPoint, QEvent, QTimer, QUrl, QDate, QSettings, pyqtSignal
+from PyQt6.QtCore import QCollator, QObject, Qt, QSize, QPoint, QEvent, QTimer, QUrl, QDate, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QAction, QDesktopServices, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QGridLayout, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
@@ -795,8 +795,12 @@ class WorkflowTemplateDialog(QDialog):
         heading.addWidget(self.search)
         layout.addLayout(heading)
         self.templates = QListWidget()
-        for row in editor['rows']:
-            item = QListWidgetItem(QIcon(str(ICON_DIR / 'ribbon-workflow-template.svg')), row.get('Name') or row.get('Description') or '')
+        collator = QCollator()
+        collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        collator.setNumericMode(True)
+        names = [(row.get('Name') or row.get('Description') or '', row) for row in editor['rows']]
+        for name, row in sorted(names, key=lambda entry: collator.sortKey(entry[0])):
+            item = QListWidgetItem(QIcon(str(ICON_DIR / 'ribbon-workflow-template.svg')), name)
             item.setData(Qt.ItemDataRole.UserRole, row['_session_index'])
             item.setToolTip(row.get('Description', ''))
             self.templates.addItem(item)
