@@ -486,23 +486,51 @@ class VapiClient:
             if context is None or not context.get('instanceId'):
                 raise ValueError('Keine Sitzung für das neue Objekt geliefert.')
             key = {1: 'aktentyp_id', 2: 'ablagetyp_id', 3: 'vorgangtyp_id'}.get(int(object_kind), 'dokumenttyp_id')
+            type_attribute = context.find("simpleAttributes[@identifier='" + key + "']")
             return {'session_id': context.get('instanceId'), 'object_kind': int(object_kind),
-                    'type_key': key, 'type_id': context.find("simpleAttributes[@identifier='" + key + "']").get('idvalue')
-                    if context.find("simpleAttributes[@identifier='" + key + "']") is not None else None,
+                    'type_key': key, 'type_id': type_attribute.get('idvalue') if type_attribute is not None else None,
+                    'type_comcode': int(type_attribute.findtext('comcode') or 0) if type_attribute is not None else 0,
+                    'attributes': parse_property_context(context),
                     'object_id': context.findtext("simpleAttributes[@identifier='obj_id']/value"),
                     'subject': context.findtext("simpleAttributes[@identifier='betreff']/value") or '', 'types': [
                 (item.findtext('text') or '', item.findtext('id'))
                 for combo in context.findall('comboList') if combo.findtext('identifier') == key
                 for item in combo.findall('itemList')]}
 
-    def create_object(self, editor, type_id, subject):
+    def select_new_object_type(self, editor, type_id):
+        """Apply a type change to a new-object session and return the attributes available for that type.
+
+        Types have type-specific fields, so the server is told about the change through the
+        type field's own command code; the changed context then lists the attributes of that type.
+        """
+        if str(type_id) not in [str(identifier) for name, identifier in editor['types']]:
+            raise ValueError('Ungültiger Objekttyp.')
+        if str(type_id) == str(editor.get('type_id')) or not editor.get('type_comcode'):
+            return editor['attributes']
+        with self._lock:
+            session = editor['session_id']
+            command = editor['type_comcode']
+            result = self.property_command(session, command, changes={editor['type_key']: str(type_id)})
+            context = result.find('changedSessionContext') if result is not None else None
+            self.property_command(session, command, 'endCommand')
+            if context is None or context.find('simpleAttributes') is None:
+                response = self.workflow_call('getAttributes', f'<sessionid xmlns="">{escape(session)}</sessionid>')
+                context = response.find('return')
+            if context is not None and context.find('simpleAttributes') is not None:
+                attributes = {a['identifier']: a for a in editor['attributes']}
+                attributes.update((a['identifier'], a) for a in parse_property_context(context))
+                editor['attributes'] = list(attributes.values())
+            editor['type_id'] = str(type_id)
+            return editor['attributes']
+
+    def create_object(self, editor, type_id, subject, fields=None):
         if not subject.strip():
             raise ValueError('Bitte einen Betreff eingeben.')
         if str(type_id) not in [str(identifier) for name, identifier in editor['types']]:
             raise ValueError('Ungültiger Objekttyp.')
         with self._lock:
             session = editor['session_id']
-            changes = {'betreff': subject.strip()}
+            changes = {**(fields or {}), 'betreff': subject.strip()}
             # Combo fields use their selected server ID, as in property editing.
             if str(type_id) != str(editor.get('type_id')):
                 changes[editor['type_key']] = str(type_id)

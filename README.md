@@ -65,6 +65,14 @@ HTTPS-Zertifikate werden geprüft, für eine interne CA kann `REQUESTS_CA_BUNDLE
 
 HTTP-Weiterleitungen werden nicht automatisch verfolgt. Verbindungs- und Lese-Timeouts betragen 10 bzw. 30 Sekunden.
 
+## Feldkonfiguration im Anlageassistenten
+
+Wenn eine der Dateien:
+- `/etc/ultrasmartclient/VISRichClientShell.exe.config`
+- `<Programmverzeichnis>/VISRichClientShell.exe.config`
+- `C:\Program Files (x86)\PDV-Systeme\SmartClient\VISRichClientShell.exe.config`
+existiert wird die Datei gelesen und der Wert aus `<setting name="CustomWizardFields">` verwendet, um entsprechende Felder im Assistenten für neue Objekte anzuzeigen (ein Feldname pro Zeile).
+
 ## SOAP-Debugausgabe
 
 Mit `--debug` werden die vollständigen SOAP-Anfrage- und Antwort-Bodys auf stdout ausgegeben, jeweils mit Endpunkt und bei Antworten HTTP-Status. Auch Fehlerantworten erscheinen vor ihrer Verarbeitung in der Ausgabe.

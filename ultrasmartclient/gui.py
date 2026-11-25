@@ -14,6 +14,7 @@ from .history import HistoryStore
 from .file_monitor import OpenFileMonitor
 from .vapi import VapiClient, Repository, TreeItem, ObjectFile
 from .theme import ThemeManager
+from .richclient_config import custom_wizard_fields
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QGridLayout, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
@@ -65,6 +66,54 @@ def object_icon(typ, repository=False):
     elif typ == 15: filename = 'dokument-out.svg'
     elif typ == 14: filename = 'dokument.svg'
     return QIcon(str(ICON_DIR / filename))
+
+
+def vertical_scroll_only(scroll):
+    """Fit a scroll area's content to its width; only vertical scrolling remains."""
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    return scroll
+
+
+def shrinkable_combo(field):
+    """Let a combo box narrow below its longest entry instead of widening the form."""
+    field.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    field.setMinimumContentsLength(6)
+    return field
+
+
+def property_field(attribute):
+    """Create the input widget the VIS properties pane uses for an attribute's draw type."""
+    name, value = attribute['name'], attribute['value']
+    if attribute['draw_type'] == '6':
+        field = QCheckBox()
+        field.setChecked(value.lower() in ('1', 'true'))
+    elif attribute['draw_type'] in ('3', '4'):
+        field = shrinkable_combo(QComboBox())
+        field.addItems(list(dict.fromkeys([value] + attribute['choices'])))
+    elif attribute['draw_type'] == '2' or name in ('Name', 'Kurzbezeichnung', 'Betreff'):
+        field = QPlainTextEdit(value)
+        field.setFixedHeight(52)
+    else:
+        field = QLineEdit(value)
+    return field
+
+
+def property_field_change(field, attribute):
+    """Return the value to send for an edited field, or None when it still holds the server value."""
+    if isinstance(field, QCheckBox):
+        value = '1' if field.isChecked() else '0'
+        original = '1' if attribute['value'].lower() in ('true', '1') else '0'
+    else:
+        value = (field.currentText() if isinstance(field, QComboBox) else
+                 field.toPlainText() if isinstance(field, QPlainTextEdit) else field.text())
+        original = attribute['value']
+    if value == original:
+        return None
+    if isinstance(field, QComboBox):
+        # Combo fields use their selected server ID.
+        value = attribute.get('choice_ids', {}).get(value) or value
+    return value
 
 
 def box(horizontal=False, margin=0, spacing=0):
@@ -320,10 +369,16 @@ class NewObjectDialog(QDialog):
         self.types = QListWidget()
         self.types.itemClicked.connect(self.select_type)
         content.addWidget(self.types, 1)
-        self.metadata_page = QWidget()
-        metadata_layout = QFormLayout(self.metadata_page)
+        self.custom_fields = custom_wizard_fields()
+        self.field_widgets = {}
+        self.metadata_page = vertical_scroll_only(QScrollArea())
+        self.metadata_page.setFrameShape(QFrame.Shape.NoFrame)
+        metadata = QWidget()
+        self.metadata_layout = QFormLayout(metadata)
+        self.metadata_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.subject = QLineEdit()
-        metadata_layout.addRow('Betreff *', self.subject)
+        self.metadata_layout.addRow('Betreff *', self.subject)
+        self.metadata_page.setWidget(metadata)
         self.metadata_page.hide()
         content.addWidget(self.metadata_page, 1)
         self.status = QLabel('Objektarten werden geladen …')
@@ -386,6 +441,8 @@ class NewObjectDialog(QDialog):
         elif phase == 'close':
             self.editor = None
             super().reject()
+        elif phase == 'fields':
+            self.show_metadata(result)
         elif phase == 'kinds':
             self.pool_id = result['pool_id']
             for name, kind in result['kinds']:
@@ -412,6 +469,37 @@ class NewObjectDialog(QDialog):
         if self.worker is not None or self.editor is None:
             return
         self.selected_type = item.data(Qt.ItemDataRole.UserRole)
+        self.selected_type_name = item.text()
+        if self.custom_fields:
+            self.status.setText('Felder werden geladen …')
+            self.run('select_new_object_type', (self.editor, self.selected_type), 'fields')
+        else:
+            self.show_metadata([])
+
+    def wizard_attributes(self, attributes):
+        """Attributes listed in CustomWizardFields, matched by identifier or label, in configured order."""
+        skip = {'betreff', self.editor.get('type_key')}
+        result = []
+        for entry in self.custom_fields:
+            key = entry.casefold()
+            for attribute in attributes:
+                if (attribute['identifier'] not in skip and attribute['behavior'] != '4' and attribute not in result
+                        and key in (attribute['identifier'].casefold(), attribute['name'].casefold())):
+                    result.append(attribute)
+        return result
+
+    def show_metadata(self, attributes):
+        while self.metadata_layout.rowCount() > 1:
+            self.metadata_layout.removeRow(1)
+        self.field_widgets = {}
+        for attribute in self.wizard_attributes(attributes):
+            field = property_field(attribute)
+            if attribute['behavior'] != '1':
+                field.setEnabled(False)
+            label = QLabel(attribute['name'])
+            label.setWordWrap(True)
+            self.metadata_layout.addRow(label, field)
+            self.field_widgets[attribute['identifier']] = (field, attribute)
         self.subject.setText(self.editor.get('subject', ''))
         self.page_title.setText('Metadaten und Inhalt')
         self.kinds_widget.hide()
@@ -421,7 +509,7 @@ class NewObjectDialog(QDialog):
         self.back_button.show()
         kind = next((b.text() for b in self.kinds_widget.findChildren(QToolButton) if b.isChecked()), '')
         self.sidebar.setText('Speicherort ✓\n' + self.parent_entry.get('name', '') +
-                             '\n\nObjektart ✓\n' + kind + '\n' + item.text() + '\n\nErfassen')
+                             '\n\nObjektart ✓\n' + kind + '\n' + self.selected_type_name + '\n\nErfassen')
         self.status.clear()
         self.subject.setFocus()
 
@@ -440,7 +528,12 @@ class NewObjectDialog(QDialog):
             self.status.setText('Bitte einen Betreff eingeben.')
             return
         self.status.setText('Objekt wird angelegt …')
-        self.run('create_object', (self.editor, self.selected_type, self.subject.text()), 'created')
+        fields = {}
+        for identifier, (field, attribute) in self.field_widgets.items():
+            value = property_field_change(field, attribute) if attribute['behavior'] == '1' else None
+            if value is not None:
+                fields[identifier] = value
+        self.run('create_object', (self.editor, self.selected_type, self.subject.text(), fields), 'created')
 
     def reject(self):
         if self.worker is not None:
@@ -2393,8 +2486,7 @@ class Client(QMainWindow):
             buttons.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(header)
         self.update_property_buttons()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        scroll = vertical_scroll_only(QScrollArea())
         body, column = box(False, 8, 8)
         column.addWidget(QLabel('Metadaten'))
         groups = [
@@ -2411,7 +2503,7 @@ class Client(QMainWindow):
                 if self.server_url:
                     value = ''
                 if name == 'Dokumententyp':
-                    field = QComboBox()
+                    field = shrinkable_combo(QComboBox())
                     field.addItems(['Sonstige', 'Vereinbarung', 'Schreiben', 'Vermerk'])
                     if self.server_url:
                         field.setCurrentIndex(-1)
@@ -2651,16 +2743,8 @@ class Client(QMainWindow):
             field = self._property_widgets.get(identifier)
             if field is None or attribute['behavior'] != '1':
                 continue
-            if isinstance(field, QCheckBox):
-                value = '1' if field.isChecked() else '0'
-                original = '1' if attribute['value'].lower() in ('true', '1') else '0'
-            else:
-                value = (field.currentText() if isinstance(field, QComboBox) else
-                         field.toPlainText() if isinstance(field, QPlainTextEdit) else field.text())
-                original = attribute['value']
-            if value != original:
-                if isinstance(field, QComboBox):
-                    value = attribute.get('choice_ids', {}).get(value) or value
+            value = property_field_change(field, attribute)
+            if value is not None:
                 changes[identifier] = value
         self.run_property_operation('save', (self._property_edit['session_id'], changes))
 
@@ -2816,21 +2900,7 @@ class Client(QMainWindow):
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             for attribute in entries:
                 name, value = attribute['name'], attribute['value']
-                if attribute['draw_type'] == '6':
-                    field = QCheckBox()
-                    field.setChecked(value.lower() in ('1', 'true'))
-                    field.setEnabled(False)
-                elif attribute['draw_type'] in ('3', '4'):
-                    field = QComboBox()
-                    field.addItems(list(dict.fromkeys([value] + attribute['choices'])))
-                    field.setEnabled(False)
-                elif attribute['draw_type'] == '2' or name in ('Name', 'Kurzbezeichnung', 'Betreff'):
-                    field = QPlainTextEdit(value)
-                    field.setFixedHeight(52)
-                    field.setReadOnly(True)
-                else:
-                    field = QLineEdit(value)
-                    field.setReadOnly(True)
+                field = property_field(attribute)
                 identifier = attribute.get('identifier')
                 writable = self._property_edit is not None and attribute.get('behavior') == '1'
                 if isinstance(field, (QCheckBox, QComboBox)):
