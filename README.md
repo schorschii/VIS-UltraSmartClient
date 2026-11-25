@@ -12,6 +12,12 @@ Ein ultra-smarter Desktop-Client für VIS - endlich schnell und plattformübergr
 
 ## Installation & Start
 
+### Paket
+
+Das entsprechende Installationspaket aus den [Github-Releases](releases) herunterladen und starten.
+
+### Manuell
+
 ```bash
 # Ubuntu system packages
 apt install python3-pyqt6 python3-requests python3-requests-gssapi python3-gssapi python3-defusedxml
@@ -23,21 +29,17 @@ venv/bin/pip install .
 venv/bin/python3 -m ultrasmartclient
 ```
 
+### Python-Modul
+
+Ein Wheel lässt sich mit `python -m pip wheel --no-deps . --wheel-dir dist` bauen.
+
 ## Demo-Modus
 
 ```bash
 python3 -m ultrasmartclient --demo
 ```
 
-Öffnet das Hauptfenster ohne Anmeldung und Serververbindung mit fiktiven Dokumenten, Metadaten, Anlagen, Aufgaben und Wiedervorlagen. Die Dokumente lassen sich im Baum auswählen; die Suche filtert den Baum. Serveraktionen sind in diesem Modus nicht verfügbar.
-
-## Offscreen-Prüfung
-
-```bash
-QT_QPA_PLATFORM=offscreen venv/bin/python -m ultrasmartclient --smoke-test
-```
-
-Prüft Fensteraufbau, Ribbon-Wechsel, Anwendungssymbol, Suche, Metadaten und Anlagen. Erzeugt eine Vorschau unter `/tmp/ultrasmartclient-pyqt6.png`.
+Öffnet das Hauptfenster ohne Anmeldung und Serververbindung mit fiktiven Dokumenten, Metadaten, Anlagen, Aufgaben und Wiedervorlagen, z.B. für Screenshots. Die Dokumente lassen sich im Baum auswählen.
 
 ## Mandanten
 
@@ -75,6 +77,10 @@ QT_QPA_PLATFORM=offscreen venv/bin/python -m unittest discover -s tests -v
 
 Die Tests prüfen Beispielantwort, SOAP-Fehler, Request/Auth-Konfiguration sowie GUI-Updates bei Erfolg und Fehler mit simuliertem Backend sowie Mandantenverwaltung und Konfigurationsspeicherung in temporären Verzeichnissen. Der Smoke-Test führt keine Serveranfrage aus. Ein echter Kerberos-Test benötigt Server und gültiges Ticket.
 
-### Python-Modul
+## Offscreen-Prüfung
 
-Ein Wheel lässt sich mit `python -m pip wheel --no-deps . --wheel-dir dist` bauen.
+```bash
+QT_QPA_PLATFORM=offscreen venv/bin/python -m ultrasmartclient --smoke-test
+```
+
+Prüft Fensteraufbau, Ribbon-Wechsel, Anwendungssymbol, Suche, Metadaten und Anlagen. Erzeugt eine Vorschau unter `/tmp/ultrasmartclient-pyqt6.png`.
