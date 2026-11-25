@@ -2221,7 +2221,7 @@ class Client(QMainWindow):
         self.avatar.setIcon(QIcon(str(ICON_DIR / 'user-placeholder.svg')))
         self.avatar.setIconSize(QSize(48, 48))
         self.avatar.setAccessibleName('Benutzerbild')
-        self.avatar.setToolTip('Benutzerbild ändern oder löschen')
+        self.avatar.setToolTip('Klicken um Benutzerbild zu ändern/löschen oder Stellvertretung zu aktivieren/deaktivieren')
         self.avatar.setFixedSize(48, 48)
         self.avatar.setObjectName('avatar')
         self.avatar.setEnabled(self.api is not None)

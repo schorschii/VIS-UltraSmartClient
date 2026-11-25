@@ -1183,6 +1183,19 @@ visible="false" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0"
             if changed is None:
                 self.cancel_property_edit(session)
                 raise ValueError('Der Server hat keine bearbeitbaren Eigenschaften geliefert.')
+            # The edit context only carries each combo's current value; fetch the selectable items.
+            combo_ids = [attribute.get('identifier') for attribute in changed.findall('simpleAttributes')
+                         if attribute.findtext('drawType') in ('3', '4') and attribute.get('identifier')]
+            if combo_ids:
+                try:
+                    combos = self.workflow_call('getComboLists', f'<sessionid xmlns="">{escape(session)}</sessionid>'
+                                                + ''.join(f'<attrIds xmlns="">{escape(key)}</attrIds>' for key in combo_ids))
+                except Exception:
+                    self.cancel_property_edit(session)
+                    raise
+                for combo in combos.findall('return'):
+                    combo.tag = 'comboList'
+                    changed.append(combo)
             return {'session_id': session, 'attributes': parse_property_context(changed),
                     'tasks': self.workflow_rows(changed if changed.find("complexAttributes[@identifier='ggvermerke']") is not None else context),
                     'reminders': self.reminder_rows(changed if changed.find("complexAttributes[@identifier='wiedervorlagen']") is not None else context)}
