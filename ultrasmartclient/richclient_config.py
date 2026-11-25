@@ -4,14 +4,9 @@ from pathlib import Path
 
 from defusedxml import ElementTree
 
+from . import executable_dir
+
 CONFIG_NAME = 'VISRichClientShell.exe.config'
-
-
-def executable_dir():
-    """Directory of the running program: the bundled executable when frozen, else the launched script."""
-    if getattr(sys, 'frozen', False):
-        return Path(sys.executable).resolve().parent
-    return Path(sys.argv[0]).resolve().parent if sys.argv and sys.argv[0] else Path.cwd()
 
 
 def config_candidates():

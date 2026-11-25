@@ -1,17 +1,23 @@
 """Persistent tenant configuration and the pre-login selection dialog."""
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QSize, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QMessageBox, QPushButton, QVBoxLayout,
 )
 
+from . import APP_NAME, VERSION, executable_dir
+
+
+TENANT_PATH_USER = Path.home() / '.config' / 'ultrasmartclient' / 'tenants.json'
+TENANT_PATH_SYSTEM = '/etc/ultrasmartclient/tenants.json'
 
 def validate_tenant(name, server_url):
     name, server_url = name.strip(), server_url.strip().rstrip('/')
@@ -27,9 +33,19 @@ def validate_tenant(name, server_url):
     return {'name': name, 'server_url': server_url}
 
 
+def system_tenant_path():
+    candidates = [
+        Path(TENANT_PATH_SYSTEM),
+        executable_dir() / 'tenants.json'
+    ]
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
 class TenantStore:
-    def __init__(self, path=None, system_path='/etc/ultrasmartclient/tenants.json'):
-        self.path = Path(path) if path is not None else Path.home() / '.config' / 'ultrasmartclient' / 'tenants.json'
+    def __init__(self, path=None, system_path=...):
+        self.path = Path(path) if path is not None else TENANT_PATH_USER
+        if system_path is ...:
+            system_path = system_tenant_path()
         self.system_path = Path(system_path) if system_path is not None else None
 
     def load(self):
@@ -93,11 +109,10 @@ class TenantSelector(QDialog):
         self.server_url = None
         self.tenant_name = None
         self.busy = False
-        self.setWindowTitle('Mandant auswählen')
+        self.setWindowTitle(APP_NAME + ' ' + VERSION + ' - Mandantenauswahl')
         self.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'icons' / 'app.png')))
         self.resize(600, 380)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('Mandant für die Anmeldung auswählen:'))
         self.tenant_list = QListWidget()
         layout.addWidget(self.tenant_list)
         form = QFormLayout()

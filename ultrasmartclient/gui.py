@@ -7,14 +7,6 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QSize, QPoint, QEvent, QTimer, QUrl, QDate, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QAction, QDesktopServices, QIcon, QPixmap
-
-from .user_selection import UserSelectionDialog
-from .stellvertreter import StellvertreterManagementDialog
-from .history import HistoryStore
-from .file_monitor import OpenFileMonitor
-from .vapi import VapiClient, Repository, TreeItem, ObjectFile
-from .theme import ThemeManager
-from .richclient_config import custom_wizard_fields
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QGridLayout, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
@@ -23,16 +15,25 @@ from PyQt6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-ICON_DIR = Path(__file__).resolve().parent / 'assets' / 'icons'
-SETTINGS_PATH = Path.home() / '.config' / 'ultrasmartclient' / 'settings.ini'
+from . import APP_NAME, VERSION
+from .user_selection import UserSelectionDialog
+from .stellvertreter import StellvertreterManagementDialog
+from .history import HistoryStore
+from .file_monitor import OpenFileMonitor
+from .vapi import VapiClient, Repository, TreeItem, ObjectFile
+from .theme import ThemeManager
+from .richclient_config import custom_wizard_fields
 
 
-def settings():
-    return QSettings(str(SETTINGS_PATH), QSettings.Format.IniFormat)
-BREADCRUMB_BUTTON_WIDTH = 160
-FILE_COLUMNS = ['Typ', 'Ausprägung', 'Version', 'Name', 'Größe', 'Geändert am', 'Geändert von', 'Angelegt am']
-CONTAINER_COLUMNS = ['Typ', 'Geschäftszeichen', 'Name', 'Heftung', 'Kurzbezeichnung', 'Betreff', 'Geändert am', 'Geändert durch']
+ICON_DIR         = Path(__file__).resolve().parent / 'assets' / 'icons'
+SETTINGS_PATH    = Path.home() / '.config' / 'ultrasmartclient' / 'settings.ini'
 
+FILE_COLUMNS = [
+    'Typ', 'Ausprägung', 'Version', 'Name', 'Größe', 'Geändert am', 'Geändert von', 'Angelegt am'
+]
+CONTAINER_COLUMNS = [
+    'Typ', 'Geschäftszeichen', 'Name', 'Heftung', 'Kurzbezeichnung', 'Betreff', 'Geändert am', 'Geändert durch'
+]
 TASK_COLUMNS = [
     ('Stufe', 'stufe'), ('Kategorie', 'kategorie'), ('Erlassen von', 'erlassen_von_id'),
     ('Erlassen für', 'erlassen_fuer_id'), ('Fällig am', 'termin'), ('Aufgabe', 'aufgabe'),
@@ -42,7 +43,6 @@ TASK_COLUMNS = [
     ('Rechteerweiterung', 'rechteerweiterung'), ('Bearbeitungsstatus', 'state'),
     ('Zeichnungsfarbe', 'zeichnungsfarbe'),
 ]
-
 REMINDER_COLUMNS = [
     ('Kategorie', ('kategorie',)),
     ('Vorlage für', ('vorlage_fuer_id', 'vorlage_fuer', 'erlassen_fuer_id')),
@@ -56,6 +56,9 @@ REMINDER_COLUMNS = [
     ('Zeichnungsfarbe', ('zeichnungsfarbe',)),
 ]
 
+
+def settings():
+    return QSettings(str(SETTINGS_PATH), QSettings.Format.IniFormat)
 
 def object_icon(typ, repository=False):
     filename = 'disabled.svg'
@@ -1044,7 +1047,7 @@ class Client(QMainWindow):
         self._favorite_jobs = {}
         self._favorite_token = 0
 
-        self.setWindowTitle('UltraSmartClient')
+        self.setWindowTitle(APP_NAME + ' ' + VERSION)
         self.setWindowIcon(QIcon(str(ICON_DIR / 'app.png')))
         self.resize(1492, 905)
         self.setMinimumSize(1000, 650)
@@ -2047,6 +2050,7 @@ class Client(QMainWindow):
                                lambda: self.navigate_content(entry, parent_path))]
         self.render_breadcrumb(path)
 
+    BREADCRUMB_BUTTON_WIDTH = 160
     def render_breadcrumb(self, path):
         self._breadcrumb_path = path
         while self.breadcrumb_layout.count():
@@ -2057,7 +2061,7 @@ class Client(QMainWindow):
         root = QToolButton()
         root.setText(self.tenant_name or 'MANDANT')
         root.setToolTip('')
-        root.setFixedWidth(BREADCRUMB_BUTTON_WIDTH)
+        root.setFixedWidth(self.BREADCRUMB_BUTTON_WIDTH)
         root.setIcon(self.windowIcon())
         root.setIconSize(QSize(16, 16))
         root.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -2074,7 +2078,7 @@ class Client(QMainWindow):
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             button.setAutoRaise(True)
             button.clicked.connect(lambda checked=False, callback=navigate: callback())
-            button.setFixedWidth(BREADCRUMB_BUTTON_WIDTH)
+            button.setFixedWidth(self.BREADCRUMB_BUTTON_WIDTH)
             self.breadcrumb_layout.addWidget(button)
         self.breadcrumb_layout.addStretch()
 
