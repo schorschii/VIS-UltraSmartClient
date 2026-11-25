@@ -2325,14 +2325,18 @@ class Client(QMainWindow):
         self.quick_due.setObjectName('quickDue')
         self.quick_due.setDisplayFormat('dd.MM.yyyy')
         self.quick_due.setCalendarPopup(True)
-        for label, field in [('Empfänger', self.quick_recipient), ('Kategorie', self.quick_category),
-                             ('Aufgabe', self.quick_redirect_task), ('Erledigungsvermerk', self.quick_redirect_note),
-                             ('Termin', self.quick_due)]:
+        for label, field in [
+            ('Empfänger', self.quick_recipient),
+            ('Kategorie', self.quick_category),
+            ('Aufgabe', self.quick_redirect_task),
+            ('Erledigungsvermerk', self.quick_redirect_note),
+            ('Termin', self.quick_due)
+        ]:
             redirect_form.addRow(label, field)
         quick_layout.addWidget(self.quick_redirect)
         self.quick_redirect.hide()
         self.quick_task_note = QPlainTextEdit()
-        self.quick_task_note.setPlaceholderText('Erledigungsvermerk')
+        self.quick_task_note.setPlaceholderText('Vermerk')
         self.quick_task_note.setFixedHeight(60)
         quick_layout.addWidget(self.quick_task_note)
         self.quick_task_complete = QPushButton('Erledigen')
@@ -2369,7 +2373,6 @@ class Client(QMainWindow):
     def quick_task_action_changed(self, index):
         self.quick_redirect.setVisible(index == 2)
         self.quick_task_note.setVisible(index != 2)
-        self.quick_task_note.setPlaceholderText('Ablehnungsvermerk' if index == 1 else 'Erledigungsvermerk')
         self.quick_task_complete.setText('Weiterleiten' if index == 2 else 'Ablehnen' if index == 1 else 'Erledigen')
         if index == 2 and not self._quick_categories_loaded:
             entry = self._current_entry
