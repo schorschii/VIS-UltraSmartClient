@@ -1,6 +1,7 @@
 name: Build and release packages
 
 on:
+  workflow_dispatch: # allow manual execution
   push:
     tags:
       - '**'
