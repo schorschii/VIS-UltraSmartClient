@@ -14,7 +14,7 @@ Ein ultra-smarter Desktop-Client für VIS - endlich schnell und plattformübergr
 
 ### Paket
 
-Das entsprechende Installationspaket aus den [Github-Releases](releases) herunterladen und starten.
+Das entsprechende Installationspaket aus den [Github-Releases](https://github.com/schorschii/VIS-UltraSmartClient/releases) herunterladen und starten.
 
 ### Manuell
 
