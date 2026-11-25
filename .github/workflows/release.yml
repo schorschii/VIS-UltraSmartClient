@@ -121,5 +121,5 @@ jobs:
           set -euo pipefail
           cd packages
           gh release create "$RELEASE_TAG" --draft --title "$RELEASE_TAG"
-          gh release upload "$RELEASE_TAG" ./*.deb --clobber
+          gh release upload "$RELEASE_TAG" ./*.{deb,dmg,exe} --clobber
           #gh release edit "$RELEASE_TAG" --draft=false
