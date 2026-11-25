@@ -18,6 +18,7 @@ from . import APP_NAME, VERSION, executable_dir
 
 TENANT_PATH_USER = Path.home() / '.config' / 'ultrasmartclient' / 'tenants.json'
 TENANT_PATH_SYSTEM = '/etc/ultrasmartclient/tenants.json'
+TENANT_REGISTRY_KEY = r'Software\Compaq\VIS'
 
 def validate_tenant(name, server_url):
     name, server_url = name.strip(), server_url.strip().rstrip('/')
@@ -41,16 +42,92 @@ def system_tenant_path():
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
+def registry_tenants(winreg=None):
+    """Read tenants from HKCU and HKLM (both registry views).
+
+    Each tenant is a subkey named by its GUID with an ``AppServer`` base URL; the
+    tenant URL is ``AppServer/GUID``. ``System\\DefaultMandant`` names the default.
+    Unusable entries are skipped since the registry is maintained by another program.
+    """
+    if winreg is None:
+        if sys.platform != 'win32':
+            return [], None
+        import winreg
+    roots = [(winreg.HKEY_CURRENT_USER, 0), (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+             (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY)]
+    tenants, urls, default_url = [], set(), None
+
+    def value(key, name):
+        try:
+            data, kind = winreg.QueryValueEx(key, name)
+        except OSError:
+            return None
+        return data.strip() if kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and isinstance(data, str) else None
+
+    for root, view in roots:
+        try:
+            base = winreg.OpenKey(root, TENANT_REGISTRY_KEY, 0, winreg.KEY_READ | view)
+        except OSError:
+            continue
+        with base:
+            index = 0
+            while True:
+                try:
+                    subkey = winreg.EnumKey(base, index)
+                except OSError:
+                    break
+                index += 1
+                if subkey.casefold() == 'system':
+                    if default_url is None:
+                        try:
+                            with winreg.OpenKey(base, subkey) as key:
+                                default = value(key, 'DefaultMandant')
+                        except OSError:
+                            default = None
+                        if default:
+                            default_url = default.strip('{}').casefold()
+                    continue
+                if not (subkey.startswith('{') and subkey.endswith('}')):
+                    continue
+                try:
+                    with winreg.OpenKey(base, subkey) as key:
+                        app_server = value(key, 'AppServer')
+                        name = value(key, '') or value(key, 'Name') or value(key, 'Description')
+                except OSError:
+                    continue
+                if not app_server or not name:
+                    continue
+                identifier = subkey.strip('{}')
+                try:
+                    tenant = validate_tenant(name, app_server.rstrip('/') + '/' + identifier)
+                except ValueError:
+                    continue
+                if tenant['server_url'] not in urls:
+                    urls.add(tenant['server_url'])
+                    tenants.append((identifier.casefold(), tenant))
+    selected = next((i for i, (identifier, _) in enumerate(tenants) if identifier == default_url), None)
+    return [tenant for _, tenant in tenants], selected
+
+
 class TenantStore:
-    def __init__(self, path=None, system_path=...):
+    def __init__(self, path=None, system_path=..., registry=...):
         self.path = Path(path) if path is not None else TENANT_PATH_USER
         if system_path is ...:
             system_path = system_tenant_path()
         self.system_path = Path(system_path) if system_path is not None else None
+        # Callable returning (tenants, selected); None disables the registry source.
+        self.registry = registry_tenants if registry is ... else registry
 
     def load(self):
         personal, selected = self._load_file(self.path)
         system, system_selected = self._load_file(self.system_path) if self.system_path else ([], None)
+        # Registry tenants follow the system configuration.
+        registry, registry_selected = self.registry() if self.registry else ([], None)
+        registry_url = registry[registry_selected]['server_url'] if registry_selected is not None else None
+        system_urls = {tenant['server_url'] for tenant in system}
+        system = system + [tenant for tenant in registry if tenant['server_url'] not in system_urls]
+        if system_selected is None and registry_url is not None:
+            system_selected = next(i for i, tenant in enumerate(system) if tenant['server_url'] == registry_url)
         # Follow system configuration order while retaining personal overrides.
         selected_url = (personal[selected]['server_url'] if selected is not None else
                         system[system_selected]['server_url'] if system_selected is not None else None)

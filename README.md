@@ -43,7 +43,9 @@ python3 -m ultrasmartclient --demo
 
 ## Mandanten
 
-Die Liste und die letzte Auswahl werden in `~/.config/ultrasmartclient/tenants.json` gespeichert. Zusätzlich werden systemweit konfigurierte Mandanten aus `/etc/ultrasmartclient/tenants.json` geladen. Die Anzeige folgt der Reihenfolge der Systemkonfiguration; nur persönlich konfigurierte Mandanten folgen danach in ihrer Dateireihenfolge. Persönliche Einträge für dieselbe URL überschreiben weiterhin die Angaben der Systemkonfiguration.
+Die Liste und die letzte Auswahl werden in `~/.config/ultrasmartclient/tenants.json` gespeichert. Zusätzlich werden systemweit konfigurierte Mandanten aus `/etc/ultrasmartclient/tenants.json` geladen. Die Anzeige folgt der Reihenfolge der Systemkonfiguration; nur persönlich konfigurierte Mandanten folgen danach in ihrer Dateireihenfolge. Persönliche Einträge für dieselbe URL überschreiben die Angaben der Systemkonfiguration.
+
+Unter Windows werden die Mandanten außerdem aus der Registry gelesen (`HKCU\Software\Compaq\VIS` und `HKLM\Software\Compaq\VIS`). Jeder Unterschlüssel `{GUID}` mit `AppServer` ergibt die URL `AppServer/GUID`; `System\DefaultMandant` bestimmt die Vorauswahl, sofern keine andere Auswahl gespeichert ist.
 
 Beide Dateien verwenden das gleiche Format, zum Beispiel:
 ```json
