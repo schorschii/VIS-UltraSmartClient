@@ -1328,7 +1328,7 @@ class Client(QMainWindow):
         for entry in entries:
             item = QTreeWidgetItem(parent if parent is not None else self.favorites, [entry['name']])
             item.setData(0, Qt.ItemDataRole.UserRole, entry)
-            item.setIcon(0, QIcon(str(ICON_DIR / 'ablage.svg')) if entry['folder'] else object_icon(entry['icon_id']))
+            item.setIcon(0, QIcon(str(ICON_DIR / 'favorite-folder.svg')) if entry['folder'] else object_icon(entry['icon_id']))
             item.setToolTip(0, f"{entry['name']}\nID: {entry['id']}\nFavoriten-ID: {entry['favorite_id']}")
             if entry['folder']:
                 item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
