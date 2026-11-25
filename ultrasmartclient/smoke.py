@@ -14,9 +14,9 @@ def smoke_test(window):
     window.center_view.setCurrentIndex(1)
     window.properties_view.setCurrentIndex(1)
     assert not window.windowIcon().isNull()
-    window.search.setText('unauffindbar')
+    window.tree_filter.setText('unauffindbar')
     assert window.tree.topLevelItem(0).isHidden()
-    window.search.clear()
+    window.tree_filter.clear()
     assert not window.tree.topLevelItem(0).isHidden()
     window.fields['Bemerkung'].setText('Test')
     assert window.metadata()['Bemerkung'] == 'Test'
@@ -36,5 +36,5 @@ def smoke_test(window):
     window.empty.show()
     window.tabs.setCurrentIndex(1)
     QApplication.processEvents()
-    window.grab().save('/tmp/ultrasmartclient-pyqt6.png')
+    window.grab().save(str(Path(tempfile.gettempdir()) / 'ultrasmartclient-pyqt6.png'))
     print('Smoke-Test erfolgreich', flush=True)
