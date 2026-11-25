@@ -5,7 +5,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt, QSize, QPoint, QEvent, QTimer, QUrl, QDate, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QSize, QPoint, QEvent, QTimer, QUrl, QDate, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QAction, QDesktopServices, QIcon, QPixmap
 
 from .user_selection import UserSelectionDialog
@@ -23,6 +23,11 @@ from PyQt6.QtWidgets import (
 )
 
 ICON_DIR = Path(__file__).resolve().parent / 'assets' / 'icons'
+SETTINGS_PATH = Path.home() / '.config' / 'ultrasmartclient' / 'settings.ini'
+
+
+def settings():
+    return QSettings(str(SETTINGS_PATH), QSettings.Format.IniFormat)
 BREADCRUMB_BUTTON_WIDTH = 160
 FILE_COLUMNS = ['Typ', 'Ausprägung', 'Version', 'Name', 'Größe', 'Geändert am', 'Geändert von', 'Angelegt am']
 CONTAINER_COLUMNS = ['Typ', 'Geschäftszeichen', 'Name', 'Heftung', 'Kurzbezeichnung', 'Betreff', 'Geändert am', 'Geändert durch']
@@ -137,14 +142,14 @@ class Section(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        button = QPushButton('⌄  ' + title)
-        button.setProperty('section_title', title)
-        button.setObjectName('section')
-        button.setCheckable(True)
-        button.setChecked(True)
-        button.toggled.connect(content.setVisible)
-        button.toggled.connect(lambda checked: button.setText(('⌄  ' if checked else '›  ') + button.property('section_title')))
-        layout.addWidget(button)
+        self.button = QPushButton('⌄  ' + title)
+        self.button.setProperty('section_title', title)
+        self.button.setObjectName('section')
+        self.button.setCheckable(True)
+        self.button.setChecked(True)
+        self.button.toggled.connect(content.setVisible)
+        self.button.toggled.connect(lambda checked: self.button.setText(('⌄  ' if checked else '›  ') + self.button.property('section_title')))
+        layout.addWidget(self.button)
         layout.addWidget(content, 1)
 
 
@@ -2200,13 +2205,19 @@ class Client(QMainWindow):
         pages.addWidget(storage)
         tabs.currentChanged.connect(pages.setCurrentIndex)
         tabs.currentChanged.connect(lambda index: self.load_my_tasks() if index == 1 and not self._my_tasks_loaded else None)
-        tabs.setCurrentIndex(2)
+        tabs.currentChanged.connect(lambda index: settings().setValue('sidebar/tab', index))
+        saved_tab = settings().value('sidebar/tab', 2, type=int)
+        tabs.setCurrentIndex(saved_tab if 0 <= saved_tab < tabs.count() else 2)
+        pages.setCurrentIndex(tabs.currentIndex())
         layout.addWidget(pages, 1)
         self.history_list = QListWidget()
         self.history_list.setAccessibleName('Verlauf')
         self.history_list.setMaximumHeight(180)
         self.history_list.itemClicked.connect(self.activate_history)
-        layout.addWidget(Section('◷  Verlauf', self.history_list))
+        history_section = Section('◷  Verlauf', self.history_list)
+        history_section.button.setChecked(settings().value('sidebar/history_expanded', True, type=bool))
+        history_section.button.toggled.connect(lambda checked: settings().setValue('sidebar/history_expanded', checked))
+        layout.addWidget(history_section)
         return panel
 
     @staticmethod
