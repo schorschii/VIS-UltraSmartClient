@@ -57,7 +57,7 @@ Beide Dateien verwenden das gleiche Format, zum Beispiel:
 
 ## Authentifizierung
 
-Die Authentifizierung nutzt `requests-gssapi` mit Kerberos und dem vorhandenen Ticket-Cache (`klist` zur Prüfung, optional `KRB5CCNAME` für einen anderen Cache). Passwörter werden nicht gespeichert. Linux benötigt Kerberos/GSSAPI-Bibliotheken, zum Bauen des Python-Moduls ggf. `libkrb5-dev`, `python3-dev` und einen C-Compiler.
+Die Authentifizierung nutzt `requests-gssapi` mit Kerberos und dem vorhandenen Ticket-Cache (`klist` zur Prüfung, optional `KRB5CCNAME` für einen anderen Cache). Unter Windows wird stattdessen `winkerberos` (SSPI) mit dem Ticket der Windows-Domänenanmeldung verwendet; MIT Kerberos ist dort nicht nötig. Passwörter werden nicht gespeichert. Linux benötigt Kerberos/GSSAPI-Bibliotheken, zum Bauen des Python-Moduls ggf. `libkrb5-dev`, `python3-dev` und einen C-Compiler.
 
 Eine geteilte Requests-Session nutzt das vorhandene Session-Cookie, um nicht jede Anfrage neu zu authentifizieren. Dadurch läuft dieser Client deutlich schneller als das Original. Falls Ihr weitere Optimierungsgeheimtipps braucht, liebe Entwickler, meldet euch gerne bei mir. Ich helfe wo ich kann.
 

@@ -7,11 +7,24 @@ import tempfile
 import base64
 import xml.etree.ElementTree as XML
 from threading import RLock
+import sys
 
-import gssapi
 import requests
 from defusedxml import ElementTree
-from requests_gssapi import HTTPSPNEGOAuth
+
+# Windows uses SSPI through winkerberos, so MIT Kerberos is not needed there.
+if sys.platform == 'win32':
+    from .sspi_auth import SSPINegotiateAuth
+else:
+    import gssapi
+    from requests_gssapi import HTTPSPNEGOAuth
+
+
+def kerberos_auth():
+    """Kerberos HTTP authentication answering 401 challenges: SSPI on Windows, GSSAPI elsewhere."""
+    if sys.platform == 'win32':
+        return SSPINegotiateAuth()
+    return HTTPSPNEGOAuth(mech=gssapi.OID.from_int_seq('1.2.840.113554.1.2.2'), opportunistic_auth=False)
 
 SOAP = 'http://www.w3.org/2003/05/soap-envelope'
 SERVICE = 'http://services.visj.pdv.de'
@@ -292,10 +305,7 @@ class VapiClient:
         self._lock = RLock()
         self._closed = False
         self.session = requests.Session()
-        self.session.auth = HTTPSPNEGOAuth(
-            mech=gssapi.OID.from_int_seq('1.2.840.113554.1.2.2'),
-            opportunistic_auth=False,
-        )
+        self.session.auth = kerberos_auth()
 
     def close(self):
         with self._lock:
