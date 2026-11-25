@@ -44,7 +44,8 @@ jobs:
       - name: Build app and disk image
         run: |
           PYTHON=python sh installer/macos/build.sh
-          mv dist/macos/UltraSmartClient.dmg "dist/macos/UltraSmartClient-macos-$(uname -m).dmg"
+          version=$(python -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' pyproject.toml)
+          mv dist/macos/UltraSmartClient.dmg "dist/macos/UltraSmartClient-${version}-$(uname -m).dmg"
       - name: Smoke test packaged app
         timeout-minutes: 3
         run: dist/macos/UltraSmartClient.app/Contents/MacOS/UltraSmartClient --smoke-test
@@ -73,11 +74,14 @@ jobs:
       - name: Build portable executable
         run: |
           ./installer/windows/build.ps1
-          Move-Item dist/windows/UltraSmartClient.exe dist/windows/UltraSmartClient-windows-x64.exe
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Could not read project version' }
+          Move-Item dist/windows/UltraSmartClient.exe "dist/windows/UltraSmartClient-$version-x64.exe"
       - name: Smoke test packaged executable
         timeout-minutes: 3
         run: |
-          $process = Start-Process dist/windows/UltraSmartClient-windows-x64.exe -ArgumentList '--smoke-test' -PassThru
+          $exe = (Get-Item dist/windows/UltraSmartClient-*-x64.exe).FullName
+          $process = Start-Process $exe -ArgumentList '--smoke-test' -PassThru
           if (-not $process.WaitForExit(120000)) {
             $process.Kill()
             throw 'Smoke test timed out'
