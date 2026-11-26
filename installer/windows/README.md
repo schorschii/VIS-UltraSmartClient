@@ -14,10 +14,14 @@ python -m venv .venv
 pip installs winkerberos as a prebuilt wheel; on Windows, python-gssapi and
 requests-gssapi are not installed. The script uses the existing environment and does not install dependencies.
 
-The output is `dist/windows/UltraSmartClient.exe`, a windowed portable single-file
-executable. Python, Qt, image assets and winkerberos are bundled; PyInstaller
-extracts runtime files to a temporary directory when it starts. No application
-installer or Python installation is required on the target machine.
+The output is `dist/windows/UltraSmartClient.zip`, a portable package. It contains
+the folder `UltraSmartClient/` with the windowed `UltraSmartClient.exe` and its
+runtime files (Python, Qt, image assets and winkerberos) directly beside it.
+Extract the whole folder and start `UltraSmartClient.exe` from there; the exe does
+not work on its own without the files next to it. Nothing is extracted to a temporary
+directory at startup, and no application installer or Python installation is
+required on the target machine. The unpacked build is also left in
+`dist/windows/UltraSmartClient/`.
 
 Options:
 
@@ -30,7 +34,7 @@ required for server access; `klist` shows the current tickets. The binary is not
 Test on a clean Windows machine as well as running this local smoke check:
 
 ```powershell
-$process = Start-Process .\dist\windows\UltraSmartClient.exe -ArgumentList '--smoke-test' -Wait -PassThru
+$process = Start-Process .\dist\windows\UltraSmartClient\UltraSmartClient.exe -ArgumentList '--smoke-test' -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw 'Smoke test failed' }
 ```
 

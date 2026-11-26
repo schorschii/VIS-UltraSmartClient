@@ -71,16 +71,20 @@ jobs:
         run: |
           python -m pip install . 'pyinstaller>=6,<7' Pillow
           if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-      - name: Build portable executable
+      - name: Build portable zip
         run: |
           ./installer/windows/build.ps1
           $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
           if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Could not read project version' }
-          Move-Item dist/windows/UltraSmartClient.exe "dist/windows/UltraSmartClient-$version-x64.exe"
+          Move-Item dist/windows/UltraSmartClient.zip "dist/windows/UltraSmartClient-$version-x64.zip"
       - name: Smoke test packaged executable
         timeout-minutes: 3
         run: |
-          $exe = (Get-Item dist/windows/UltraSmartClient-*-x64.exe).FullName
+          # Test the zip content as users get it, not the build folder.
+          $zip = (Get-Item dist/windows/UltraSmartClient-*-x64.zip).FullName
+          $extracted = Join-Path $env:RUNNER_TEMP 'ultrasmartclient-zip'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extracted -Force
+          $exe = Join-Path $extracted 'UltraSmartClient/UltraSmartClient.exe'
           $process = Start-Process $exe -ArgumentList '--smoke-test' -PassThru
           if (-not $process.WaitForExit(120000)) {
             $process.Kill()
@@ -90,7 +94,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-windows
-          path: dist/windows/*.exe
+          path: dist/windows/*.zip
           if-no-files-found: error
 
   release:
@@ -115,5 +119,5 @@ jobs:
           set -euo pipefail
           cd packages
           gh release create "$RELEASE_TAG" --draft --title "$RELEASE_TAG"
-          gh release upload "$RELEASE_TAG" ./*.{deb,dmg,exe} --clobber
+          gh release upload "$RELEASE_TAG" ./*.{deb,dmg,zip} --clobber
           #gh release edit "$RELEASE_TAG" --draft=false
