@@ -1,8 +1,9 @@
 """Offline sample content for the interactive demo window."""
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QTableWidgetItem, QPlainTextEdit, QLineEdit, QListWidgetItem
+from PyQt6.QtWidgets import QPlainTextEdit, QLineEdit, QListWidgetItem
 
 from .gui import Client
+from .table_sort import SortableItem, sorting_suspended
 
 
 def create_demo_window():
@@ -69,10 +70,11 @@ def create_demo_window():
                   '24.11.2026', 'Alex Beispiel', '20.11.2026'),
                  ('TXT', '—', '—', 'Besprechungsnotizen.txt', '3.2 KiB',
                   '23.11.2026', 'Kim Muster', '21.11.2026')]
-        window.content.setRowCount(len(files))
-        for row, values in enumerate(files):
-            for column, value in enumerate(values):
-                window.content.setItem(row, column, QTableWidgetItem(value))
+        with sorting_suspended(window.content):
+            window.content.setRowCount(len(files))
+            for row, values in enumerate(files):
+                for column, value in enumerate(values):
+                    window.content.setItem(row, column, SortableItem(value))
         window.empty.hide()
         window.show_tasks([
             {'aufgabe': 'Bitte prüfen und Stellung nehmen', 'erlassen_fuer_id': 'Kim Muster',

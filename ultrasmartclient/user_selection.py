@@ -36,6 +36,8 @@ class UserSelectionDialog(QDialog):
         self.nodes = {}
         self.loaded = set()
         self.pending = {}
+        # Items expanded by the search filter, collapsed again when they no longer match.
+        self.search_expanded = set()
         self.setWindowTitle('Nutzerauswahl')
         self.resize(430, 610)
         layout = QVBoxLayout(self)
@@ -117,6 +119,7 @@ class UserSelectionDialog(QDialog):
             self.close_session()
             return
         self.search.setEnabled(True)
+        self.search.setFocus()
         self.tree_session = root['session_id']
         item = QTreeWidgetItem([root['name']])
         item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
@@ -190,6 +193,15 @@ class UserSelectionDialog(QDialog):
             children = [visit(item.child(i)) for i in range(item.childCount())]
             visible = not query or query in item.text(0).casefold() or any(children)
             item.setHidden(not visible)
+            # Open branches containing a match so the result is visible.
+            node_id = (item.data(0, Qt.ItemDataRole.UserRole) or {}).get('id')
+            if query and any(children):
+                if not item.isExpanded():
+                    self.search_expanded.add(node_id)
+                    item.setExpanded(True)
+            elif node_id in self.search_expanded:
+                self.search_expanded.discard(node_id)
+                item.setExpanded(False)
             return visible
         for index in range(self.tree.topLevelItemCount()):
             visit(self.tree.topLevelItem(index))

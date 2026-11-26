@@ -22,6 +22,7 @@ from .history import HistoryStore
 from .file_monitor import OpenFileMonitor
 from .vapi import VapiClient, Repository, TreeItem, ObjectFile
 from .theme import ThemeManager
+from .table_sort import SORT_ROLE, SortableItem, enable_sorting, sorting_suspended
 from .richclient_config import custom_wizard_fields
 
 
@@ -125,6 +126,22 @@ def box(horizontal=False, margin=0, spacing=0):
     layout.setContentsMargins(margin, margin, margin, margin)
     layout.setSpacing(spacing)
     return widget, layout
+
+
+class LayoutButton(QPushButton):
+    """Push button whose content is a layout of child widgets instead of text/icon."""
+
+    def sizeHint(self):
+        return self.layout().sizeHint() if self.layout() else super().sizeHint()
+
+    def minimumSizeHint(self):
+        return self.layout().minimumSize() if self.layout() else super().minimumSizeHint()
+
+    def hasHeightForWidth(self):
+        return self.layout().hasHeightForWidth() if self.layout() else super().hasHeightForWidth()
+
+    def heightForWidth(self, width):
+        return self.layout().totalHeightForWidth(width) if self.layout() else super().heightForWidth(width)
 
 
 class ContentTable(QTableWidget):
@@ -584,9 +601,10 @@ class ObjectHistoryDialog(QDialog):
         for index, row in enumerate(rows):
             for column, (_label, key) in enumerate(columns):
                 value = row.get(key, '')
-                item = QTableWidgetItem(value)
+                item = SortableItem(value)
                 item.setToolTip(value)
                 self.table.setItem(index, column, item)
+        enable_sorting(self.table)
         layout.addWidget(self.table)
         self.empty = QLabel('Keine Historieneinträge vorhanden.')
         self.empty.setVisible(not rows)
@@ -1679,16 +1697,19 @@ class Client(QMainWindow):
                              daemon=True).start()
             return
         self.content.setHorizontalHeaderLabels(FILE_COLUMNS)
-        self.content.setRowCount(len(files))
-        for row, file in enumerate(files):
-            values = (Path(file.name).suffix.lstrip('.').upper(), '—', '—', file.name,
-                      f'{file.size / 1024:.1f} KiB', file.modified.replace('T', ' '),
-                      file.modified_by, file.created.replace('T', ' '))
-            for column, value in enumerate(values):
-                cell = QTableWidgetItem(value)
-                cell.setData(Qt.ItemDataRole.UserRole, file)
-                cell.setToolTip(file.comment or file.name)
-                self.content.setItem(row, column, cell)
+        with sorting_suspended(self.content):
+            self.content.setRowCount(len(files))
+            for row, file in enumerate(files):
+                values = (Path(file.name).suffix.lstrip('.').upper(), '—', '—', file.name,
+                          f'{file.size / 1024:.1f} KiB', file.modified.replace('T', ' '),
+                          file.modified_by, file.created.replace('T', ' '))
+                for column, value in enumerate(values):
+                    cell = SortableItem(value)
+                    if column == 4:
+                        cell.setData(SORT_ROLE, file.size)
+                    cell.setData(Qt.ItemDataRole.UserRole, file)
+                    cell.setToolTip(file.comment or file.name)
+                    self.content.setItem(row, column, cell)
         self.empty.setText('Dieses Objekt besitzt keinen Inhalt.')
         self.empty.setVisible(not files)
         if 'Anlagen' in self.fields and 'Anlagen' not in getattr(self, '_server_property_names', set()):
@@ -1716,33 +1737,36 @@ class Client(QMainWindow):
     def show_references(self, references):
         self._displayed_references = list(references)
         self.references_empty.setToolTip('')
-        self.references.setRowCount(len(references))
-        for row, reference in enumerate(references):
-            entry = {'id': reference.id, 'name': reference.name or str(reference.id),
-                     'typ': reference.object_kind, 'object_kind': reference.object_kind,
-                     'repository': False}
-            values = (str(reference.object_kind), reference.name, reference.relation,
-                      reference.comment, reference.sequence)
-            for column, value in enumerate(values):
-                cell = QTableWidgetItem(value)
-                cell.setData(Qt.ItemDataRole.UserRole, entry)
-                cell.setToolTip(f'{value}\nID: {reference.id}')
-                cell.setData(Qt.ItemDataRole.UserRole + 1, reference)
-                if column == 0:
-                    cell.setText('')
-                    cell.setIcon(object_icon(reference.icon_id or reference.object_kind))
-                self.references.setItem(row, column, cell)
+        with sorting_suspended(self.references):
+            self.references.setRowCount(len(references))
+            for row, reference in enumerate(references):
+                entry = {'id': reference.id, 'name': reference.name or str(reference.id),
+                         'typ': reference.object_kind, 'object_kind': reference.object_kind,
+                         'repository': False}
+                values = (str(reference.object_kind), reference.name, reference.relation,
+                          reference.comment, reference.sequence)
+                for column, value in enumerate(values):
+                    cell = SortableItem(value)
+                    cell.setData(Qt.ItemDataRole.UserRole, entry)
+                    cell.setToolTip(f'{value}\nID: {reference.id}')
+                    cell.setData(Qt.ItemDataRole.UserRole + 1, reference)
+                    if column == 0:
+                        cell.setText('')
+                        cell.setData(SORT_ROLE, reference.object_kind)
+                        cell.setIcon(object_icon(reference.icon_id or reference.object_kind))
+                    self.references.setItem(row, column, cell)
         self.references_empty.setText('Dieses Objekt hat keine Bezüge.')
         self.references_empty.setVisible(not references)
 
     def show_links(self, links):
         self.links_empty.setToolTip('')
-        self.links.setRowCount(len(links))
-        for row, link in enumerate(links):
-            for column, value in enumerate(link):
-                cell = QTableWidgetItem(value)
-                cell.setToolTip(value)
-                self.links.setItem(row, column, cell)
+        with sorting_suspended(self.links):
+            self.links.setRowCount(len(links))
+            for row, link in enumerate(links):
+                for column, value in enumerate(link):
+                    cell = SortableItem(value)
+                    cell.setToolTip(value)
+                    self.links.setItem(row, column, cell)
         self.links_empty.setText('Dieses Objekt hat keine Verknüpfung.')
         self.links_empty.setVisible(not links)
     def current_links(self):
@@ -1821,17 +1845,19 @@ class Client(QMainWindow):
         if error:
             self.object_files_finished(token, None, error)
             return
-        self.content.setRowCount(len(children))
-        for row, child in enumerate(children):
-            values = ('', child.reference, child.text, child.sequence, child.short_name,
-                      child.subject, child.modified.replace('T', ' '), child.modified_by)
-            for column, value in enumerate(values):
-                cell = QTableWidgetItem(value)
-                cell.setData(Qt.ItemDataRole.UserRole, child)
-                cell.setToolTip(value or child.text)
-                if column == 0:
-                    cell.setIcon(object_icon(child.icon_id))
-                self.content.setItem(row, column, cell)
+        with sorting_suspended(self.content):
+            self.content.setRowCount(len(children))
+            for row, child in enumerate(children):
+                values = ('', child.reference, child.text, child.sequence, child.short_name,
+                          child.subject, child.modified.replace('T', ' '), child.modified_by)
+                for column, value in enumerate(values):
+                    cell = SortableItem(value)
+                    cell.setData(Qt.ItemDataRole.UserRole, child)
+                    cell.setToolTip(value or child.text)
+                    if column == 0:
+                        cell.setData(SORT_ROLE, child.icon_id)
+                        cell.setIcon(object_icon(child.icon_id))
+                    self.content.setItem(row, column, cell)
         self.empty.setText('Dieses Objekt besitzt keinen Inhalt.')
         self.empty.setVisible(not children)
         self.statusBar().showMessage(f'{len(children)} Objekte geladen.')
@@ -1955,7 +1981,7 @@ class Client(QMainWindow):
             label = 'Stellvertreter konnten nicht geladen werden' if isinstance(error, str) and error else 'Keine Stellvertreter vorhanden'
             menu.addAction(label).setEnabled(False)
         menu.setToolTipsVisible(True)
-        selected = menu.exec(self.avatar.mapToGlobal(self.avatar.rect().bottomLeft()))
+        selected = menu.exec(self.user_button.mapToGlobal(self.user_button.rect().bottomLeft()))
         if selected in delegates:
             windows = [window for window in QApplication.topLevelWidgets()
                        if isinstance(window, Client) and window.api is self.api]
@@ -1963,7 +1989,7 @@ class Client(QMainWindow):
                 return
             worker = WorkflowWorker()
             self._picture_worker = worker
-            self.avatar.setEnabled(False)
+            self.user_button.setEnabled(False)
             worker.finished.connect(self.stellvertreter_finished)
             self.statusBar().showMessage('Stellvertretung wird gewechselt …')
             threading.Thread(target=worker.run,
@@ -1988,14 +2014,14 @@ class Client(QMainWindow):
             return
         worker = UserPictureWorker()
         self._picture_worker = worker
-        self.avatar.setEnabled(False)
+        self.user_button.setEnabled(False)
         worker.finished.connect(self.user_picture_finished)
         self.statusBar().showMessage('Benutzerbild wird aktualisiert …')
         threading.Thread(target=worker.run, args=(self.api, data), daemon=True).start()
 
     def stellvertreter_finished(self, result, error):
         self._picture_worker = None
-        self.avatar.setEnabled(True)
+        self.user_button.setEnabled(True)
         if error:
             QMessageBox.warning(self, 'Stellvertreterwechsel fehlgeschlagen', error)
             return
@@ -2011,7 +2037,7 @@ class Client(QMainWindow):
 
     def user_picture_finished(self, data, error):
         self._picture_worker = None
-        self.avatar.setEnabled(self.api is not None)
+        self.user_button.setEnabled(self.api is not None)
         if error:
             dialog = QMessageBox(self)
             dialog.setWindowTitle('Benutzerbild konnte nicht aktualisiert werden')
@@ -2027,15 +2053,20 @@ class Client(QMainWindow):
     def display_user_picture(self, data):
         pixmap = QPixmap()
         if isinstance(data, bytes) and data and pixmap.loadFromData(data):
-            self.avatar.setIcon(QIcon(pixmap))
+            self.avatar.setPixmap(QIcon(pixmap).pixmap(QSize(48, 48)))
         else:
-            self.avatar.setIcon(QIcon(str(ICON_DIR / 'user-placeholder.svg')))
+            self.avatar.setPixmap(QIcon(str(ICON_DIR / 'user-placeholder.svg')).pixmap(QSize(48, 48)))
+
+    def update_user_button_tooltip(self):
+        user_id = self.api.user_id if self.api is not None else None
+        lines = [f'Benutzer-ID: {user_id}' if user_id else '',
+                 'Klicken um Benutzerbild zu ändern/löschen oder Stellvertretung zu aktivieren/deaktivieren']
+        self.user_button.setToolTip('\n'.join(line for line in lines if line))
 
     def user_info_loaded(self, display_name):
         self.display_user_picture(self.api.user_picture if self.api is not None else b'')
         self.user_name.setText(display_name)
-        user_id = self.api.user_id if self.api is not None else None
-        self.user_name.setToolTip(f'Benutzer-ID: {user_id}' if user_id else '')
+        self.update_user_button_tooltip()
         self.statusBar().showMessage('Angemeldet als ' + display_name)
 
     def update_breadcrumb(self, item, _previous=None):
@@ -2220,19 +2251,25 @@ class Client(QMainWindow):
     def sidebar(self):
         panel, layout = box()
         panel.setMinimumWidth(240)
-        user, row = box(True, 12, 12)
-        self.avatar = QPushButton()
-        self.avatar.setIcon(QIcon(str(ICON_DIR / 'user-placeholder.svg')))
-        self.avatar.setIconSize(QSize(48, 48))
-        self.avatar.setAccessibleName('Benutzerbild')
-        self.avatar.setToolTip('Klicken um Benutzerbild zu ändern/löschen oder Stellvertretung zu aktivieren/deaktivieren')
-        self.avatar.setFixedSize(48, 48)
+        user, row = box(True, 5)
+        # Picture, user name and tenant form one button that opens the user menu.
+        self.user_button = LayoutButton()
+        self.user_button.setObjectName('userButton')
+        self.user_button.setAccessibleName('Benutzermenü')
+        self.user_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.user_button.setEnabled(self.api is not None)
+        self.user_button.clicked.connect(self.user_picture_menu)
+        self.user_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.user_button.customContextMenuRequested.connect(self.user_picture_menu)
+        button_row = QHBoxLayout(self.user_button)
+        button_row.setContentsMargins(6, 6, 6, 6)
+        button_row.setSpacing(12)
+        self.avatar = QLabel()
         self.avatar.setObjectName('avatar')
-        self.avatar.setEnabled(self.api is not None)
-        self.avatar.clicked.connect(self.user_picture_menu)
-        self.avatar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.avatar.customContextMenuRequested.connect(self.user_picture_menu)
-        row.addWidget(self.avatar)
+        self.avatar.setFixedSize(48, 48)
+        self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.avatar.setPixmap(QIcon(str(ICON_DIR / 'user-placeholder.svg')).pixmap(QSize(48, 48)))
+        button_row.addWidget(self.avatar)
         self.user_name = QLabel('Nicht verbunden')
         self.user_name.setTextFormat(Qt.TextFormat.PlainText)
         self.user_name.setWordWrap(True)
@@ -2242,10 +2279,14 @@ class Client(QMainWindow):
         self.tenant_label = QLabel(self.tenant_name or '')
         self.tenant_label.setTextFormat(Qt.TextFormat.PlainText)
         self.tenant_label.setWordWrap(True)
-        self.tenant_label.setToolTip(self.server_url or '')
         self.tenant_label.setVisible(bool(self.tenant_name))
         identity_layout.addWidget(self.tenant_label)
-        row.addWidget(identity, 1)
+        button_row.addWidget(identity, 1)
+        # Clicks and hover go to the button, not to its labels.
+        for child in (self.avatar, identity, self.user_name, self.tenant_label):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.update_user_button_tooltip()
+        row.addWidget(self.user_button, 1)
         layout.addWidget(user)
         tabs = QTabBar()
         for title in ('Favoriten', 'Aufgaben', 'Ablagen'):
@@ -2384,28 +2425,32 @@ class Client(QMainWindow):
         self._displayed_tasks = tasks
         if hasattr(self, 'quick_tasks_box'):
             self.update_quick_tasks()
-        self.task_table.setRowCount(len(tasks))
-        for row, task in enumerate(tasks):
-            for column, (_label, key) in enumerate(TASK_COLUMNS):
-                value = task.get(key, '')
-                cell = QTableWidgetItem(value)
-                cell.setToolTip(value)
-                cell.setData(Qt.ItemDataRole.UserRole, task)
-                if key == 'freigabe':
-                    cell.setText('')
-                    cell.setCheckState(Qt.CheckState.Checked if value.lower() in ('1', 'true') else Qt.CheckState.Unchecked)
-                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                elif key == 'state' and task.get('freigabe', '').lower() not in ('1', 'true'):
-                    cell.setText('')
-                    cell.setToolTip('')
-                elif key == 'state':
-                    completed = bool(task.get('erledigt_am'))
-                    cell.setText('●')
-                    cell.setForeground(QColor('#87996b' if completed else '#c68b32'))
-                    cell.setToolTip(('Erledigt' if completed else 'Offen') + f' (Status: {value})')
-                elif key == 'zeichnungsfarbe' and value == '-2700':
-                    cell.setText('')
-                self.task_table.setItem(row, column, cell)
+        with sorting_suspended(self.task_table):
+            self.task_table.setRowCount(len(tasks))
+            for row, task in enumerate(tasks):
+                for column, (_label, key) in enumerate(TASK_COLUMNS):
+                    value = task.get(key, '')
+                    cell = SortableItem(value)
+                    cell.setToolTip(value)
+                    cell.setData(Qt.ItemDataRole.UserRole, task)
+                    if key == 'freigabe':
+                        cell.setText('')
+                        cell.setData(SORT_ROLE, int(value.lower() in ('1', 'true')))
+                        cell.setCheckState(Qt.CheckState.Checked if value.lower() in ('1', 'true') else Qt.CheckState.Unchecked)
+                        cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    elif key == 'state' and task.get('freigabe', '').lower() not in ('1', 'true'):
+                        cell.setText('')
+                        cell.setData(SORT_ROLE, -1)
+                        cell.setToolTip('')
+                    elif key == 'state':
+                        completed = bool(task.get('erledigt_am'))
+                        cell.setText('●')
+                        cell.setData(SORT_ROLE, int(completed))
+                        cell.setForeground(QColor('#87996b' if completed else '#c68b32'))
+                        cell.setToolTip(('Erledigt' if completed else 'Offen') + f' (Status: {value})')
+                    elif key == 'zeichnungsfarbe' and value == '-2700':
+                        cell.setText('')
+                    self.task_table.setItem(row, column, cell)
         self.tasks_empty.setToolTip('')
         self.tasks_empty.setText('Dieses Objekt hat keine Aufgaben.')
         self.tasks_empty.setVisible(not tasks)
@@ -2417,21 +2462,23 @@ class Client(QMainWindow):
 
     def show_reminders(self, reminders):
         self._displayed_reminders = list(reminders)
-        self.reminder_table.setRowCount(len(reminders))
-        for row, reminder in enumerate(reminders):
-            for column, (_label, keys) in enumerate(REMINDER_COLUMNS):
-                value = next((reminder[key] for key in keys if reminder.get(key)), '')
-                cell = QTableWidgetItem(value)
-                cell.setToolTip(value)
-                cell.setData(Qt.ItemDataRole.UserRole, reminder)
-                if keys[0] == 'state':
-                    completed = bool(reminder.get('erledigt_am'))
-                    cell.setText('●')
-                    cell.setForeground(QColor('#87996b' if completed else '#c68b32'))
-                    cell.setToolTip(('Erledigt' if completed else 'Offen') + f' (Status: {value})')
-                elif keys[0] == 'zeichnungsfarbe' and value == '-2700':
-                    cell.setText('')
-                self.reminder_table.setItem(row, column, cell)
+        with sorting_suspended(self.reminder_table):
+            self.reminder_table.setRowCount(len(reminders))
+            for row, reminder in enumerate(reminders):
+                for column, (_label, keys) in enumerate(REMINDER_COLUMNS):
+                    value = next((reminder[key] for key in keys if reminder.get(key)), '')
+                    cell = SortableItem(value)
+                    cell.setToolTip(value)
+                    cell.setData(Qt.ItemDataRole.UserRole, reminder)
+                    if keys[0] == 'state':
+                        completed = bool(reminder.get('erledigt_am'))
+                        cell.setText('●')
+                        cell.setData(SORT_ROLE, int(completed))
+                        cell.setForeground(QColor('#87996b' if completed else '#c68b32'))
+                        cell.setToolTip(('Erledigt' if completed else 'Offen') + f' (Status: {value})')
+                    elif keys[0] == 'zeichnungsfarbe' and value == '-2700':
+                        cell.setText('')
+                    self.reminder_table.setItem(row, column, cell)
         title = f'Wiedervorlagen ({len(reminders)})'
         button = self.reminders_section.findChild(QPushButton)
         button.setProperty('section_title', title)
@@ -2453,6 +2500,7 @@ class Client(QMainWindow):
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if headers[0] == 'Typ':
             table.setColumnWidth(0, 44)
+        enable_sorting(table)
         label = QLabel(message)
         label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         label.setObjectName('emptyMessage')
@@ -3246,9 +3294,11 @@ class Client(QMainWindow):
         file = Path(path)
         size = file.stat().st_size
         row = self.content.rowCount()
-        self.content.insertRow(row)
-        for col, value in enumerate([file.suffix.lstrip('.').upper(), 'Original', '1', file.name, f'{size / 1024:.1f} KB', 'Heute', 'Benutzername', 'Heute']):
-            self.content.setItem(row, col, QTableWidgetItem(value))
+        with sorting_suspended(self.content):
+            self.content.insertRow(row)
+            for col, value in enumerate([file.suffix.lstrip('.').upper(), 'Original', '1', file.name, f'{size / 1024:.1f} KB', 'Heute', 'Benutzername', 'Heute']):
+                self.content.setItem(row, col, SortableItem(value))
+            self.content.item(row, 4).setData(SORT_ROLE, size)
         self.attachments.append(str(file.resolve()))
         self.empty.hide()
         if 'Anlagen' in self.fields:
@@ -3381,8 +3431,12 @@ QMenu::item:selected:enabled { color: palette(highlighted-text); background: pal
 QMenu::item:disabled { color: palette(placeholder-text); }
 QMenu::separator { height: 1px; background: palette(mid); margin: 4px 8px; }
 QPushButton#quickRecipient, QDateEdit#quickDue, QPushButton#workflowRecipient, QDateEdit#workflowDue { background: palette(base); color: palette(text); }
-QLineEdit, QComboBox, QPlainTextEdit { background: palette(base); border: 1px solid palette(midlight); padding: 3px; min-height: 17px; }
-QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus { border: 1px solid palette(link); }
+QLineEdit, QPlainTextEdit { background: palette(base); border: 1px solid palette(midlight); padding: 3px; min-height: 17px; }
+QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid palette(link); }
+/* Leave combo boxes unstyled so Qt draws them with the native platform style;
+   the line edit inside editable combo boxes must not get its own frame. */
+QComboBox { background: none; }
+QComboBox QLineEdit, QComboBox QLineEdit:focus { background: none; border: none; padding: 0; min-height: 0; }
 QTabBar#centerTabs::tab { padding: 10px 12px; min-height: 42px; }
 QTabBar::tab { padding: 6px 13px; border-bottom: 2px solid transparent; }
 QTabBar::tab:selected { color: palette(link); border-bottom: 2px solid palette(link); background: palette(base); }
@@ -3405,13 +3459,18 @@ QTreeWidget, QListWidget { border: none; outline: none; }
 QListWidget#searchResults::item:hover { background: palette(highlight); color: palette(highlighted-text); }
 QTreeWidget::item, QListWidget::item { min-height: 30px; }
 QTreeWidget::item:selected, QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
-QTableWidget, QTableWidget QWidget { background: palette(base); border: none; }
+QTableWidget, QTableWidget > QWidget { background: palette(base); border: none; }
 QHeaderView::section { background: palette(base); color: palette(placeholder-text); border: none; border-right: 1px solid palette(mid); border-bottom: 1px solid palette(mid); padding: 5px; }
 QSplitter::handle { background: palette(mid); width: 1px; height: 1px; }
 QScrollArea { border: none; }
+/* Leave scrollbars unstyled so Qt draws them with the native platform style. */
+QScrollBar { background: none; }
 QStatusBar { border-top: 1px solid palette(mid); color: palette(placeholder-text); }
 QLabel#emptyMessage { color: palette(placeholder-text); background: palette(base); }
-QPushButton#avatar { background: transparent; border: none; padding: 0; }
+QPushButton#userButton { background: transparent; border: 1px solid transparent; padding: 0; }
+QPushButton#userButton:focus { border: 1px solid palette(link); }
+QPushButton#userButton:hover, QPushButton#userButton:pressed { background: palette(highlight); border: 1px solid palette(link); }
+QPushButton#userButton QWidget { background: transparent; }
 QToolTip { color: palette(tool-tip-text); background: palette(tool-tip-base); border: 1px solid palette(mid); }
 QTableWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
 QToolButton:hover, QPushButton:hover { color: palette(highlighted-text); }

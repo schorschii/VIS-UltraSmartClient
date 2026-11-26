@@ -1,8 +1,9 @@
 """Server-backed Stellvertreter administration."""
 import threading
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton, QMenu
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTableWidget, QHeaderView, QPushButton, QMenu
 from .user_selection import TreeRequest, UserSelectionDialog
+from .table_sort import SortableItem, enable_sorting, sorting_suspended
 
 
 class StellvertreterManagementDialog(QDialog):
@@ -24,6 +25,7 @@ class StellvertreterManagementDialog(QDialog):
         self.entries.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.entries.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.entries.customContextMenuRequested.connect(self.context_menu)
+        enable_sorting(self.entries)
         layout.addWidget(self.entries)
         self.error = QLabel()
         self.error.setWordWrap(True)
@@ -58,16 +60,17 @@ class StellvertreterManagementDialog(QDialog):
 
     def loaded(self, state):
         self.state = state
-        self.entries.setRowCount(len(state['rows']))
-        for row_index, row in enumerate(state['rows']):
-            values = (row.get('stellvertreterName', ''), row.get('stellvertreterVorname', ''),
-                      'Ja' if str(row.get('aktiv', '')).lower() in ('1', 'true') else 'Nein',
-                      row.get('stellvertreterStelle', ''),
-                      'Ja' if str(row.get('mail', '')).lower() in ('1', 'true') else 'Nein')
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setData(Qt.ItemDataRole.UserRole, row['_session_index'])
-                self.entries.setItem(row_index, column, item)
+        with sorting_suspended(self.entries):
+            self.entries.setRowCount(len(state['rows']))
+            for row_index, row in enumerate(state['rows']):
+                values = (row.get('stellvertreterName', ''), row.get('stellvertreterVorname', ''),
+                          'Ja' if str(row.get('aktiv', '')).lower() in ('1', 'true') else 'Nein',
+                          row.get('stellvertreterStelle', ''),
+                          'Ja' if str(row.get('mail', '')).lower() in ('1', 'true') else 'Nein')
+                for column, value in enumerate(values):
+                    item = SortableItem(value)
+                    item.setData(Qt.ItemDataRole.UserRole, row['_session_index'])
+                    self.entries.setItem(row_index, column, item)
         self.add_button.setEnabled(True)
         if not state['rows']:
             self.error.setText('Keine Stellvertreter vorhanden.')
