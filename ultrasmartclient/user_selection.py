@@ -23,13 +23,17 @@ class TreeRequest(QObject):
 
 
 class UserSelectionDialog(QDialog):
-    def __init__(self, api, parent=None, root_callback=None, root_args=(), confirm_callback=None):
+    def __init__(self, api, parent=None, root_callback=None, root_args=(), confirm_callback=None,
+                 cleanup_callback=None):
         super().__init__(parent)
         self.api = api
         self.selection = None
         self.selection_path = None
         self.selection_root = None
         self.confirm_callback = confirm_callback
+        # Called with the root instead of closing the selection session when the dialog is cancelled.
+        self.cleanup_callback = cleanup_callback
+        self.confirm_result = None
         self.tree_session = None
         self.selection_session = None
         self.closed = False
@@ -91,7 +95,10 @@ class UserSelectionDialog(QDialog):
         self.closed = True
         if self.selection_session is not None:
             session, self.selection_session = self.selection_session, None
-            self.request('cleanup', self.api.close_user_selection, (session,), lambda result: None)
+            if self.cleanup_callback is not None:
+                self.request('cleanup', self.cleanup_callback, (self.selection_root,), lambda result: None)
+            else:
+                self.request('cleanup', self.api.close_user_selection, (session,), lambda result: None)
 
     def request(self, key, callback, args, completed):
         if key in self.pending:
@@ -174,7 +181,8 @@ class UserSelectionDialog(QDialog):
         self.tree.setEnabled(False)
         self.request('confirm', self.confirm_callback, (self.selection_root, self.selection_path), self.confirmed)
 
-    def confirmed(self, _result):
+    def confirmed(self, result):
+        self.confirm_result = result
         self.selection_session = None
         super().accept()
 

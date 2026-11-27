@@ -24,6 +24,8 @@ from .vapi import VapiClient, Repository, TreeItem, ObjectFile
 from .theme import ThemeManager
 from .table_sort import SORT_ROLE, SortableItem, enable_sorting, sorting_suspended
 from .richclient_config import custom_wizard_fields
+from .mail_options import MailOptionsDialog
+from .workflow_template_management import WorkflowTemplateManagementDialog
 
 
 ICON_DIR         = Path(__file__).resolve().parent / 'assets' / 'icons'
@@ -898,6 +900,7 @@ class PropertyEditWorker(QObject):
                       'new_reminder': api.create_reminder,
                       'delete_link': api.delete_link,
                       'delete_task': api.delete_workflow_task, 'delete_reminder': api.delete_reminder,
+                      'task_command': api.workflow_task_command,
                       'delete_references': api.delete_references,
                       'open_template': api.open_workflow_templates,
                       'prepare_task': api.prepare_existing_task_edit,
@@ -1052,7 +1055,7 @@ class LoginStartup(QObject):
 
 
 class Client(QMainWindow):
-    command_message = pyqtSignal(str, bool)
+    command_message = pyqtSignal(str, str)
 
     def __init__(self, server_url=None, display_name=None, api=None, history_store=None, tenant_name=None,
                  load_repositories_on_start=True):
@@ -1781,12 +1784,42 @@ class Client(QMainWindow):
         table.selectRow(item.row())
         row = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
+        idle = (self.api is not None and self._property_worker is None
+                and row is not None and row.get('_session_index') is not None)
         delete_action = menu.addAction('Löschen')
-        delete_action.setEnabled(self.api is not None and self._property_worker is None
-                                 and row is not None and row.get('_session_index') is not None)
-        if menu.exec(table.viewport().mapToGlobal(position)) == delete_action and delete_action.isEnabled():
+        delete_action.setEnabled(idle)
+        row_actions = {}
+        if table is self.task_table:
+            # Position in the session's order, which the table's sorting may not show.
+            order = [str(task.get('_session_index')) for task in self._property_edit.get('tasks', [])]
+            position_in_session = order.index(str(row['_session_index'])) if idle and str(row['_session_index']) in order else -1
+            first, last = position_in_session == 0, position_in_session == len(order) - 1
+            available = self.api.workflow_task_commands(self._property_edit) if self.api is not None else {}
+            for label, action, allowed in (
+                    (None, None, None),
+                    ('Nach oben schieben', 'up', not first),
+                    ('Nach unten schieben', 'down', not last),
+                    (None, None, None),
+                    ('Wie vorherige Stufe', 'previous_stage', not first),
+                    ('Wie nachfolgende Stufe', 'next_stage', not last),
+                    ('Als eigene Stufe', 'own_stage', True)):
+                if label is None:
+                    menu.addSeparator()
+                    continue
+                entry = menu.addAction(label)
+                entry.setEnabled(idle and position_in_session >= 0 and allowed and action in available)
+                if action not in available:
+                    entry.setToolTip('Der Server bietet diesen Befehl für dieses Objekt nicht an.')
+                row_actions[entry] = action
+            menu.setToolTipsVisible(True)
+        chosen = menu.exec(table.viewport().mapToGlobal(position))
+        if chosen is None or not chosen.isEnabled():
+            return
+        if chosen == delete_action:
             self.create_workflow_task('delete_task' if table is self.task_table else 'delete_reminder',
                                       (row['_session_index'],))
+        elif chosen in row_actions:
+            self.create_workflow_task('task_command', (row_actions[chosen], row['_session_index']))
 
     def references_context_menu(self, position):
         item = self.references.itemAt(position)
@@ -2140,9 +2173,15 @@ class Client(QMainWindow):
         groups = [
             [
                 ('Navigation', [
-                    ('Suchen', 'search', 'ribbon-search.svg'),
-                    ('Stellvertreterverwaltung', 'stellvertreter-management', 'ribbon-stellvertreter.svg')
-                ])
+                    ('Suchen', 'search', 'ribbon-search.svg')
+                ]),
+                ('Einstellungen', [
+                    ('Stellvertreterverwaltung', 'stellvertreter-management', 'ribbon-stellvertreter.svg'),
+                    ('E-Mail-Optionen', 'mail-options', 'ribbon-mail-options.svg'),
+                    ('Geschäftsgangmuster-\nVerwaltung', 'workflow-template-management', 'ribbon-workflow-template.svg')
+                ]),
+                #('Administration', [
+                #])
             ],
             [
                 ('Zwischenablage', [
@@ -2847,7 +2886,8 @@ class Client(QMainWindow):
                         for key, (value, _idvalue) in dialog.changes.items():
                             task[key] = value.split(';')[2] if key == 'erlassen_fuer_id' and value.startswith('--;') else value
                 self.show_tasks(self._property_edit['tasks'])
-        elif action in ('new_task', 'new_reminder', 'delete_link', 'delete_references', 'delete_task', 'delete_reminder'):
+        elif action in ('new_task', 'new_reminder', 'delete_link', 'delete_references', 'delete_task', 'delete_reminder',
+                        'task_command'):
             self._property_edit = result
             self.show_properties(result['attributes'])
             for key, value in getattr(self, '_workflow_property_values', {}).items():
@@ -2869,6 +2909,8 @@ class Client(QMainWindow):
                 self.show_references(result['references'])
             if action in ('delete_task', 'delete_reminder'):
                 self.statusBar().showMessage('Eintrag entfernt. Bitte speichern, um die Änderung zu übernehmen.')
+            elif action == 'task_command':
+                self.statusBar().showMessage('Geschäftsgangverfügungen geändert. Bitte speichern, um die Änderung zu übernehmen.')
             elif action == 'delete_references':
                 self.statusBar().showMessage('Bezüge entfernt. Bitte speichern, um die Änderung zu übernehmen.')
             elif action == 'delete_link':
@@ -2892,10 +2934,14 @@ class Client(QMainWindow):
             self.reload_object_tables()
         self.update_property_buttons()
 
-    def show_command_message(self, text, is_error):
+    def show_command_message(self, text, message_type):
+        # VIS message types: 1 = information, 3 = error, others = warning.
+        icon, title = {'1': (QMessageBox.Icon.Information, 'Hinweis'),
+                       '3': (QMessageBox.Icon.Critical, 'Befehl fehlgeschlagen')}.get(
+                           message_type, (QMessageBox.Icon.Warning, 'Warnung'))
         dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Icon.Critical if is_error else QMessageBox.Icon.Warning)
-        dialog.setWindowTitle('Befehl fehlgeschlagen' if is_error else 'Warnung')
+        dialog.setIcon(icon)
+        dialog.setWindowTitle(title)
         dialog.setTextFormat(Qt.TextFormat.PlainText)
         dialog.setText(text)
         dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
@@ -3338,6 +3384,12 @@ class Client(QMainWindow):
         if action == 'stellvertreter-management':
             if self.api is not None:
                 StellvertreterManagementDialog(self.api, self).exec()
+        elif action == 'mail-options':
+            if self.api is not None:
+                MailOptionsDialog(self.api, self).exec()
+        elif action == 'workflow-template-management':
+            if self.api is not None:
+                WorkflowTemplateManagementDialog(self.api, self).exec()
         elif action == 'new-object':
             if self.api is None or not self._current_entry or self._current_entry.get('object_kind') is None:
                 self.statusBar().showMessage('Bitte zuerst einen Speicherort auswählen.')

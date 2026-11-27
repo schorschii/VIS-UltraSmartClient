@@ -303,6 +303,7 @@ class VapiClient:
         self.tasks_session_id = None
         self.tasks_version = 0
         self._lock = RLock()
+        self._session_commands = {}  # session id -> {menu label: command id}
         self._closed = False
         self.session = requests.Session()
         self.session.auth = kerberos_auth()
@@ -361,9 +362,11 @@ class VapiClient:
                     text = '\n'.join(''.join(node.itertext()).strip() for node in message
                                      if node.tag.rsplit('}', 1)[-1] == 'text')
                     text = text or 'Der Server hat eine Meldung ohne Text geliefert.'
-                    is_error = message.get('type') == '3'
+                    message_type = message.get('type') or ''
+                    is_error = message_type == '3'
                     if self.command_message_handler is not None:
-                        self.command_message_handler(text, is_error)
+                        # VIS message types: 1 = information, 3 = error, others = warning.
+                        self.command_message_handler(text, message_type)
                     if is_error:
                         errors.append(text)
         if errors:
@@ -436,6 +439,27 @@ class VapiClient:
         if body.find(f'{{{SERVICE}}}setUserPictureResponse') is None:
             raise ValueError('Der Server hat die Änderung des Benutzerbilds nicht bestätigt.')
         self.user_picture = data
+
+    def fetch_user_properties(self):
+        """Return the user's stored settings (UserRepository.getProperties) as a dict."""
+        payload = f'''<soap:Envelope xmlns:soap="{SOAP}"><soap:Body>
+<getProperties xmlns="{SERVICE}"/></soap:Body></soap:Envelope>'''.encode('utf-8')
+        body = parse_soap_body(self.soap_request('UserRepository', payload))
+        response = body.find(f'{{{SERVICE}}}getPropertiesResponse')
+        if response is None:
+            raise ValueError('Der Server hat keine Benutzereinstellungen geliefert.')
+        return {entry.findtext('key'): entry.findtext('value') or ''
+                for entry in response.findall('return/entries') if entry.findtext('key')}
+
+    def set_user_property(self, name, value, save=True):
+        """Store one user setting (UserRepository.setProperty)."""
+        payload = f'''<soap:Envelope xmlns:soap="{SOAP}"><soap:Body>
+<setProperty xmlns="{SERVICE}"><name xmlns="">{escape(name)}</name><value xmlns="">{escape(str(value))}</value>
+<save xmlns="">{'true' if save else 'false'}</save></setProperty>
+</soap:Body></soap:Envelope>'''.encode('utf-8')
+        body = parse_soap_body(self.soap_request('UserRepository', payload))
+        if body.find(f'{{{SERVICE}}}setPropertyResponse') is None:
+            raise ValueError('Der Server hat die Änderung der Einstellung nicht bestätigt.')
 
     def fetch_display_name(self, user_id=-1):
         request = USER_INFO_REQUEST.replace(b'>-1</id>', f'>{int(user_id)}</id>'.encode())
@@ -849,8 +873,7 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                 context = response.find('return')
                 if context is None or not context.get('instanceId'):
                     raise ValueError('Keine Objektsitzung vorhanden.')
-                state = {'session_id': context.get('instanceId'), 'attributes': parse_property_context(context),
-                         'tasks': self.workflow_rows(context), 'reminders': self.reminder_rows(context)}
+                state = self._object_state(context)
             state = dict(state)
             for operation in ('startCommand', 'endCommand'):
                 result = self.property_command(state['session_id'], command_id, operation,
@@ -866,13 +889,55 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
             state['workflow'] = True
             return state
 
+    def _object_state(self, context):
+        """State of a new object session (createGetBoSession context)."""
+        self._note_commands(context.get('instanceId'), context)
+        return {'session_id': context.get('instanceId'), 'attributes': parse_property_context(context),
+                'tasks': self.workflow_rows(context), 'reminders': self.reminder_rows(context)}
+
+    def _note_commands(self, session_id, *contexts):
+        """Remember the labelled commands a session context offers (its context menu entries)."""
+        commands = self.__dict__.setdefault('_session_commands', {}).setdefault(session_id, {})
+        for context in contexts:
+            for command in context.iter('commands') if context is not None else ():
+                if command.get('comcode') and command.get('menuLabel'):
+                    commands[command.get('menuLabel')] = int(command.get('comcode'))
+
+    # Task row commands of the object session, found by their menu labels; the object session uses
+    # other command IDs than the template editor (TEMPLATE_TASK_COMMANDS) and none are documented.
+    TASK_ROW_COMMAND_LABELS = {'up': ('nach oben',), 'down': ('nach unten',),
+                               'previous_stage': ('vorherige stufe',), 'next_stage': ('nachfolgende stufe',),
+                               'own_stage': ('eigene stufe', 'neue stufe')}
+
+    def workflow_task_commands(self, state):
+        """{action: command id} of the task row commands the object session offers."""
+        commands = self.__dict__.get('_session_commands', {}).get((state or {}).get('session_id'), {})
+        found = {}
+        for action, patterns in self.TASK_ROW_COMMAND_LABELS.items():
+            matches = [(label, command) for label, command in commands.items()
+                       if any(pattern in label.lower() for pattern in patterns)
+                       and 'wiedervorlage' not in label.lower()]
+            # Prefer entries naming the task list (e.g. "GGV nach oben") over other lists' entries.
+            matches.sort(key=lambda match: not any(word in match[0].lower() for word in ('ggv', 'geschäftsgang')))
+            if matches:
+                found[action] = matches[0][1]
+        return found
+
+    def workflow_task_command(self, object_id, object_kind, state, action, index):
+        """Run a task row command (move, stage) on the selected task of the object session."""
+        command = self.workflow_task_commands(state).get(action)
+        if command is None:
+            raise ValueError('Der Server bietet diesen Befehl für Geschäftsgangverfügungen nicht an.')
+        return self._delete_workflow_row(state, index, 'tasks', 'ggvermerke', command, remove=False)
+
     def delete_workflow_task(self, object_id, object_kind, state, index):
         return self._delete_workflow_row(state, index, 'tasks', 'ggvermerke', 3004)
 
     def delete_reminder(self, object_id, object_kind, state, index):
         return self._delete_workflow_row(state, index, 'reminders', 'wiedervorlagen', 3021)
 
-    def _delete_workflow_row(self, state, index, key, identifier, command_id):
+    def _delete_workflow_row(self, state, index, key, identifier, command_id, remove=True):
+        """Run a command on one selected row (deletion by default) and return the updated state."""
         with self._lock:
             if state is None:
                 raise ValueError('Bitte zuerst den Bearbeitungsmodus aktivieren.')
@@ -885,14 +950,15 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
 <attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>3</changeTyp>
 <master>false</master><slave>false</slave></columns></rows></complexAttributes>'''
             updated = dict(state)
-            updated[key] = [row for row in state[key] if str(row.get('_session_index')) != str(index)]
+            if remove:
+                updated[key] = [row for row in state[key] if str(row.get('_session_index')) != str(index)]
             prefix = f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">{command_id}</commandid>'
             for operation, content in (
                 ('startCommand', f'<changedAttributes xmlns="">{selection}</changedAttributes><param xmlns=""><version>0</version></param>'),
                 ('endCommand', '<serviceParams xmlns=""><version>0</version></serviceParams>')):
                 result = self.workflow_call(operation, prefix + content).find('return')
                 if result is not None and result.get('serviceName'):
-                    raise ValueError('Der Server hat das Löschen nicht bestätigt.')
+                    raise ValueError('Der Server hat den Befehl nicht bestätigt.')
                 context = result.find('changedSessionContext') if result is not None else None
                 if context is not None:
                     if context.findall('simpleAttributes'):
@@ -902,6 +968,12 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                                                          ('reminders', 'wiedervorlagen', self.reminder_rows)):
                             if context.find(f"complexAttributes[@identifier='{collection}']") is not None:
                                 updated[name] = parser(context)
+                            elif (not remove and name == key
+                                  and context.find(f"changedElements[@identifier='{collection}']") is not None):
+                                # Only reported as changed: fetch the reordered rows.
+                                updated[name] = self.fetch_template_tasks(state['session_id'])
+            if not remove and updated[key] is state[key]:
+                updated[key] = self.fetch_template_tasks(state['session_id'])
             return updated
 
     def delete_link(self, object_id, object_kind, state, link):
@@ -912,8 +984,7 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                     f'<obj_id xmlns="">{int(object_id)}</obj_id><obj_typ xmlns="">{int(object_kind)}</obj_typ>').find('return')
                 if context is None or not context.get('instanceId'):
                     raise ValueError('Keine Objektsitzung vorhanden.')
-                state = {'session_id': context.get('instanceId'), 'attributes': parse_property_context(context),
-                         'tasks': self.workflow_rows(context), 'reminders': self.reminder_rows(context)}
+                state = self._object_state(context)
                 collection = context.find("complexAttributes[@identifier='links']")
             else:
                 collection = self.workflow_call('getComplexAttribute',
@@ -960,8 +1031,7 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                     f'<obj_id xmlns="">{int(object_id)}</obj_id><obj_typ xmlns="">{int(object_kind)}</obj_typ>').find('return')
                 if context is None or not context.get('instanceId'):
                     raise ValueError('Keine Objektsitzung vorhanden.')
-                state = {'session_id': context.get('instanceId'), 'attributes': parse_property_context(context),
-                         'tasks': self.workflow_rows(context), 'reminders': self.reminder_rows(context)}
+                state = self._object_state(context)
                 collection = context.find("complexAttributes[@identifier='bezuege']")
             else:
                 collection = self.workflow_call('getComplexAttribute',
@@ -1016,8 +1086,7 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                     f'<obj_id xmlns="">{int(object_id)}</obj_id><obj_typ xmlns="">{int(object_kind)}</obj_typ>').find('return')
                 if context is None or not context.get('instanceId'):
                     raise ValueError('Keine Objektsitzung vorhanden.')
-                state = {'session_id': context.get('instanceId'), 'attributes': parse_property_context(context),
-                         'tasks': self.workflow_rows(context), 'reminders': self.reminder_rows(context)}
+                state = self._object_state(context)
             result = self.workflow_call('startCommand',
                 f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">3028</commandid>'
                 '<changedAttributes xmlns=""/><param xmlns=""><version>0</version></param>').find('return')
@@ -1196,6 +1265,7 @@ visible="false" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0"
                 for combo in combos.findall('return'):
                     combo.tag = 'comboList'
                     changed.append(combo)
+            self._note_commands(session, context, changed)
             return {'session_id': session, 'attributes': parse_property_context(changed),
                     'tasks': self.workflow_rows(changed if changed.find("complexAttributes[@identifier='ggvermerke']") is not None else context),
                     'reminders': self.reminder_rows(changed if changed.find("complexAttributes[@identifier='wiedervorlagen']") is not None else context)}
@@ -1241,9 +1311,383 @@ visible="false" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0"
         return self.open_workflow_task(
             {'session_id': context.get('instanceId'), 'tasks': tasks}, task['_session_index'])
 
-    def open_stellvertreter_management(self):
+    def tenant_id(self):
+        """Tenant GUID in braces, taken from the last path segment of the server URL."""
         tenant = unquote(urlsplit(self.server_url).path.rstrip('/').rsplit('/', 1)[-1])
-        tenant = '{' + tenant.strip('{}') + '}'
+        return '{' + tenant.strip('{}') + '}'
+
+    def open_workflow_template_management(self):
+        """Open the GGVMUSTERVERWALTUNG list session; it stays open for creating templates."""
+        with self._lock:
+            state = {'session_id': self._create_template_list_session()}
+            try:
+                return dict(state, kinds=self.fetch_workflow_template_kinds(state),
+                            rows=self.reload_workflow_template_list(state))
+            except Exception:
+                self.close_workflow_template_management(state)
+                raise
+
+    def _create_template_list_session(self):
+        context = self.workflow_call('createServiceSession',
+            '<serviceName xmlns="">GGVMUSTERVERWALTUNG</serviceName><serviceParams xmlns="">'
+            f'<entries><key xsi:type="xsd:string">mandant</key><value xsi:type="xsd:string">{escape(self.tenant_id())}</value></entries>'
+            '<version>0</version></serviceParams>').find('return')
+        if context is None or not context.get('instanceId'):
+            raise ValueError('Keine Sitzung für die Geschäftsgangmusterverwaltung vorhanden.')
+        return context.get('instanceId')
+
+    def _template_list_after_editor(self, editor):
+        """List state ({session_id, rows}) to show once a template editor is closed.
+
+        Creating a template (command 200401) leaves the list session filtered to that
+        template's object kind, so the list then continues in a fresh, unfiltered session."""
+        if not editor.get('list_command', True):
+            state = {'session_id': editor['list_session']}
+            return dict(state, rows=self.reload_workflow_template_list(state))
+        try:
+            self.close_user_selection(editor['list_session'])
+        except Exception:
+            pass
+        state = {'session_id': self._create_template_list_session()}
+        try:
+            return dict(state, rows=self.reload_workflow_template_list(state))
+        except Exception:
+            self.close_workflow_template_management(state)
+            raise
+
+    def fetch_workflow_template_kinds(self, state):
+        """Object kinds templates can be created for, as [(id, name)] (combo list "objektartId")."""
+        with self._lock:
+            combos = self.workflow_call('getComboLists',
+                f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><attrIds xmlns="">objektartId</attrIds>')
+            kinds = []
+            for combo in combos.findall('return'):
+                if combo.findtext('identifier') != 'objektartId':
+                    continue
+                for item in combo.findall('itemList'):
+                    try:
+                        kind = int(item.findtext('id'))
+                    except (TypeError, ValueError):
+                        continue
+                    if kind != -1:  # "- Alle -" is the list filter, not an object kind
+                        kinds.append((kind, item.findtext('text') or str(kind)))
+            if not kinds:
+                raise ValueError('Der Server hat keine Objektarten für Geschäftsgangmuster geliefert.')
+            return kinds
+
+    def reload_workflow_template_list(self, state):
+        with self._lock:
+            prefix = f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid>'
+            self.workflow_call('getComplexAttributes', prefix + '<identifiers xmlns="">iter@trefferliste</identifiers>')
+            collection = self.workflow_call('getComplexAttribute',
+                prefix + '<identifier xmlns="">iter@trefferliste</identifier>').find('return')
+            if collection is None:
+                raise ValueError('Der Server hat keine Musterliste geliefert.')
+            return [dict({col.get('identifier'): col.findtext('value') or '' for col in row.findall('columns')},
+                         _session_index=int(row.get('index'))) for row in collection.findall('rows')]
+
+    def delete_workflow_template(self, state, index):
+        """Delete one template from the list (command 200402) and return the reloaded list."""
+        with self._lock:
+            index = int(index)
+            indices = [int(row['_session_index']) for row in state['rows']]
+            if index not in indices:
+                raise ValueError('Das Geschäftsgangmuster ist nicht mehr vorhanden. Bitte neu laden.')
+            rows = ''.join(f'''<rows focused="false" selected="{str(row == index).lower()}" style="0" styleColor="0"
+visible="false" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0">
+<columns identifier="__select" idvalue="0" maxLength="0" behavior="0"><value>{int(row == index)}</value>
+<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>3</changeTyp>
+<master>false</master><slave>false</slave></columns></rows>''' for row in indices)
+            selection = f'<complexAttributes behavior="0" identifier="iter@trefferliste">{rows}</complexAttributes>'
+            prefix = f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">200402</commandid>'
+            for operation, content in (
+                ('startCommand', f'<changedAttributes xmlns="">{selection}</changedAttributes><param xmlns=""><version>0</version></param>'),
+                # The user already confirmed; answer a server confirmation prompt with "yes".
+                ('endCommand', '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">messagereturn</key>'
+                               '<value xsi:type="xsd:byte">1</value></entries><version>0</version></serviceParams>')):
+                result = self.workflow_call(operation, prefix + content).find('return')
+                if result is not None and result.get('serviceName'):
+                    params = {entry.findtext('key'): entry.findtext('value')
+                              for entry in result.findall('serviceParams/entries')}
+                    if not (operation == 'startCommand' and result.get('serviceName') == 'MESSAGE'
+                            and params.get('commandId') == '200402' and params.get('messageType') in ('2', '6')):
+                        if operation == 'startCommand':
+                            # Close the rejected command without confirming anything.
+                            try:
+                                self.workflow_call('endCommand', prefix + '<serviceParams xmlns=""><version>0</version></serviceParams>')
+                            except Exception:
+                                pass
+                        raise ValueError((params.get('message') or '').strip()
+                                         or 'Der Server hat das Löschen des Geschäftsgangmusters nicht bestätigt.')
+            return self.reload_workflow_template_list(state)
+
+    def close_workflow_template_management(self, state):
+        self.close_user_selection(state['session_id'])
+
+    def _template_command(self, session_id, operation, command_id, content):
+        """Run one command in a template session; server dialogs become errors with their text."""
+        result = self.workflow_call(operation,
+            f'<sessionid xmlns="">{escape(session_id)}</sessionid><commandid xmlns="">{int(command_id)}</commandid>'
+            + content).find('return')
+        if result is not None and result.get('serviceName'):
+            params = {entry.findtext('key'): entry.findtext('value') for entry in result.findall('serviceParams/entries')}
+            raise ValueError((params.get('message') or '').strip()
+                             or 'Der Server meldet eine Rückfrage oder einen Validierungsfehler.')
+        return result
+
+    @staticmethod
+    def _template_changes(changes, row_changes, selected=None, indices=()):
+        """changedAttributes XML for edited fields ({id: (value, idvalue)}) and task cells ({index: {column: value}}).
+
+        With ``selected``, every row in ``indices`` is sent and only that task row is marked selected."""
+        attributes = ''
+        for identifier, (value, idvalue) in (changes or {}).items():
+            # Combo fields send only the selected ID, as the objektartId in startCommand 200401.
+            value_xml = '' if idvalue is not None else f'<value>{escape(str(value))}</value>'
+            attributes += f'''<simpleAttributes identifier={quoteattr(identifier)} idvalue="{int(idvalue or 0)}" maxLength="0" behavior="0">
+{value_xml}<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode>
+<changeTyp>{2 if idvalue is not None else 3}</changeTyp><master>false</master><slave>false</slave></simpleAttributes>'''
+        rows = ''
+        row_changes = {int(index): columns for index, columns in (row_changes or {}).items()}
+        for index in sorted(set(row_changes) | {int(index) for index in indices}):
+            chosen = selected is not None and index == int(selected)
+            columns = [('__select', '1' if chosen else '0')] + list(row_changes.get(index, {}).items())
+            cells = ''
+            for identifier, value in columns:
+                # Combo cells (Kategorie) are (text, id): only the ID is sent, like combo fields.
+                idvalue = None
+                if isinstance(value, tuple):
+                    value, idvalue = value
+                value_xml = '' if idvalue is not None else f'<value>{escape(str(value))}</value>'
+                cells += f'''<columns identifier={quoteattr(identifier)} idvalue="{int(idvalue or 0)}" maxLength="0" behavior="0">
+{value_xml}<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode>
+<changeTyp>{2 if idvalue is not None else 3}</changeTyp><master>false</master><slave>false</slave></columns>'''
+            focused = chosen if selected is not None else True
+            rows += f'''<rows focused="{str(focused).lower()}" selected="{str(chosen).lower()}" style="0" styleColor="0" visible="false" index="{index}"
+dragDropDataObjId="0" dragDropTyp="0" uniqueId="0">{cells}</rows>'''
+        if rows:
+            attributes += f'<complexAttributes behavior="0" identifier="ggvermerke">{rows}</complexAttributes>'
+        return f'<changedAttributes xmlns="">{attributes}</changedAttributes>'
+
+    def _update_template_editor(self, editor, result):
+        context = result.find('changedSessionContext') if result is not None else None
+        if context is None:
+            return
+        changed = {attribute['identifier']: attribute for attribute in parse_property_context(context)}
+        if changed:
+            editor['attributes'] = [changed.get(attribute['identifier'], attribute) for attribute in editor['attributes']]
+        if context.find("complexAttributes[@identifier='ggvermerke']") is not None:
+            editor['tasks'] = self.workflow_rows(context)
+        elif context.find("changedElements[@identifier='ggvermerke']") is not None:
+            # The server often only reports the task list as changed; fetch its rows.
+            editor['tasks'] = self.fetch_template_tasks(editor['session_id'])
+
+    def fetch_template_tasks(self, session_id):
+        collection = self.workflow_call('getComplexAttribute',
+            f'<sessionid xmlns="">{escape(session_id)}</sessionid><identifier xmlns="">ggvermerke</identifier>').find('return')
+        if collection is None:
+            raise ValueError('Der Server hat keine Geschäftsgangverfügungen geliefert.')
+        # workflow_rows reads the rows of a session context's ggvermerke collection.
+        context = XML.Element('context')
+        collection.tag = 'complexAttributes'
+        collection.set('identifier', 'ggvermerke')
+        context.append(collection)
+        return self.workflow_rows(context)
+
+    def fetch_template_categories(self, session_id):
+        """Kategorien of the template's task rows ({text: id}), queried like in the task editor (GGVEDIT)."""
+        try:
+            combos = self.workflow_call('getComboLists',
+                f'<sessionid xmlns="">{escape(session_id)}</sessionid><attrIds xmlns="">kategorie</attrIds>')
+        except Exception:
+            return {}  # the rows' own combo lists are used instead
+        return {item.findtext('text') or '': item.findtext('id')
+                for combo in combos.findall('return') if combo.findtext('identifier') == 'kategorie'
+                for item in combo.findall('itemList') if item.findtext('id') is not None}
+
+    def new_workflow_template(self, state, object_kind):
+        """Start the details session for a new template of one object kind (command 200401)."""
+        with self._lock:
+            objektart = f'''<simpleAttributes identifier="objektartId" idvalue="{int(object_kind)}" maxLength="0" behavior="0">
+<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>2</changeTyp>
+<master>false</master><slave>false</slave></simpleAttributes>'''
+            result = self.workflow_call('startCommand',
+                f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">200401</commandid>'
+                f'<changedAttributes xmlns="">{objektart}</changedAttributes><param xmlns=""><version>0</version></param>').find('return')
+            if (result is None or result.get('serviceName') != 'GGVMUSTERVERWALTUNG_DETAILS'
+                    or result.find('serviceParams') is None):
+                raise ValueError('Der Server hat keinen Geschäftsgangmuster-Editor geliefert.')
+            params = result.find('serviceParams')
+            try:
+                context = self.workflow_call('createServiceSession',
+                    '<serviceName xmlns="">GGVMUSTERVERWALTUNG_DETAILS</serviceName>' + self.workflow_params(params)).find('return')
+                if context is None or not context.get('instanceId'):
+                    raise ValueError('Keine Sitzung für den Geschäftsgangmuster-Editor vorhanden.')
+            except Exception:
+                self._end_template_editor_command(state, None)
+                raise
+            attributes = parse_property_context(context)
+            for attribute, node in zip(attributes, context.findall('simpleAttributes')):
+                attribute['idvalue'] = node.get('idvalue', '0')
+            return {'session_id': context.get('instanceId'), 'params': XML.tostring(params, encoding='unicode'),
+                    'list_session': state['session_id'], 'list_command': True, 'object_kind': int(object_kind),
+                    'attributes': attributes, 'tasks': self.workflow_rows(context),
+                    'categories': self.fetch_template_categories(context.get('instanceId'))}
+
+    def open_workflow_template(self, state, template):
+        """Open an existing template from the list in its details session."""
+        with self._lock:
+            template_id, object_kind = int(template['MusterId']), int(template['objektart_id'])
+            params = XML.fromstring(
+                '<serviceParams xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+                'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+                '<entries><key xsi:type="xsd:string">zeiEnabled</key><value xsi:type="xsd:string">0</value></entries>'
+                f'<entries><key xsi:type="xsd:string">ggvmusterId</key><value xsi:type="xsd:int">{template_id}</value></entries>'
+                '<entries><key xsi:type="xsd:string">nutzerauswahl_options</key><value xsi:type="xsd:int">536870976</value></entries>'
+                '<entries><key xsi:type="xsd:string">nutzerauswahl_mode</key><value xsi:type="xsd:int">299</value></entries>'
+                f'<entries><key xsi:type="xsd:string">mandant</key><value xsi:type="xsd:string">{escape(self.tenant_id())}</value></entries>'
+                f'<entries><key xsi:type="xsd:string">objektartId</key><value xsi:type="xsd:int">{object_kind}</value></entries>'
+                '<version>0</version></serviceParams>')
+            context = self.workflow_call('createServiceSession',
+                '<serviceName xmlns="">GGVMUSTERVERWALTUNG_DETAILS</serviceName>' + self.workflow_params(params)).find('return')
+            if context is None or not context.get('instanceId'):
+                raise ValueError('Das Geschäftsgangmuster konnte nicht geöffnet werden.')
+            attributes = parse_property_context(context)
+            for attribute, node in zip(attributes, context.findall('simpleAttributes')):
+                attribute['idvalue'] = node.get('idvalue', '0')
+            # Unlike a new template, no command of the list session waits for this session.
+            return {'session_id': context.get('instanceId'), 'params': XML.tostring(params, encoding='unicode'),
+                    'list_session': state['session_id'], 'list_command': False, 'object_kind': object_kind,
+                    'template_id': template_id, 'attributes': attributes, 'tasks': self.workflow_rows(context),
+                    'categories': self.fetch_template_categories(context.get('instanceId'))}
+
+    def add_workflow_template_task(self, editor, changes, row_changes):
+        """Add a task row (command 200600 "GGV hinzufügen"), sending the edits made so far."""
+        with self._lock:
+            editor = dict(editor)
+            for operation, content in (
+                ('startCommand', self._template_changes(changes, row_changes) + '<param xmlns=""><version>0</version></param>'),
+                ('endCommand', '<serviceParams xmlns=""><version>0</version></serviceParams>')):
+                self._update_template_editor(editor, self._template_command(editor['session_id'], operation, 200600, content))
+            return editor
+
+    # Task row commands of the template editor (context menu of the task list).
+    TEMPLATE_TASK_COMMANDS = {'delete': 200601, 'up': 200602, 'down': 200603,
+                              'own_stage': 200604, 'previous_stage': 200605, 'next_stage': 200606}
+
+    def workflow_template_task_command(self, editor, action, index, changes, row_changes):
+        """Run a task row command on the selected row, sending the edits made so far."""
+        command = self.TEMPLATE_TASK_COMMANDS[action]
+        with self._lock:
+            editor = dict(editor)
+            indices = [int(task['_session_index']) for task in editor['tasks']]
+            if int(index) not in indices:
+                raise ValueError('Die Geschäftsgangverfügung ist nicht mehr vorhanden.')
+            for operation, content in (
+                ('startCommand', self._template_changes(changes, row_changes, index, indices)
+                                 + '<param xmlns=""><version>0</version></param>'),
+                ('endCommand', '<serviceParams xmlns=""><version>0</version></serviceParams>')):
+                self._update_template_editor(editor, self._template_command(editor['session_id'], operation, command, content))
+            return editor
+
+    def open_template_user_selection(self, editor, index, changes, row_changes):
+        """Start "Erlassen für" (200607) for one task row and open the NUTZERAUSWAHL session it asks for."""
+        with self._lock:
+            indices = [int(task['_session_index']) for task in editor['tasks']]
+            if int(index) not in indices:
+                raise ValueError('Die Geschäftsgangverfügung ist nicht mehr vorhanden.')
+            session = editor['session_id']
+            def end_command():
+                self.workflow_call('endCommand', f'<sessionid xmlns="">{escape(session)}</sessionid>'
+                    '<commandid xmlns="">200607</commandid><serviceParams xmlns=""><version>0</version></serviceParams>')
+            result = self.workflow_call('startCommand',
+                f'<sessionid xmlns="">{escape(session)}</sessionid><commandid xmlns="">200607</commandid>'
+                + self._template_changes(changes, row_changes, index, indices)
+                + '<param xmlns=""><version>0</version></param>').find('return')
+            if result is None or result.get('serviceName') != 'NUTZERAUSWAHL' or result.find('serviceParams') is None:
+                messages = {entry.findtext('key'): entry.findtext('value')
+                            for entry in (result.findall('serviceParams/entries') if result is not None else [])}
+                end_command()
+                raise ValueError((messages.get('message') or '').strip() or 'Der Server hat keine Nutzerauswahl geliefert.')
+            params = result.find('serviceParams')
+            try:
+                context = self.workflow_call('createServiceSession',
+                    '<serviceName xmlns="">NUTZERAUSWAHL</serviceName>' + self.workflow_params(params)).find('return')
+                if context is None or not context.get('instanceId'):
+                    raise ValueError('Der Server hat keine Nutzerauswahl-Sitzung geliefert.')
+            except Exception:
+                end_command()
+                raise
+            selection_session = context.get('instanceId')
+            try:
+                root = self.fetch_user_tree(selection_session, 'tree')
+            except Exception:
+                self.close_user_selection(selection_session)
+                end_command()
+                raise
+            root.update(selection_session=selection_session, editor=editor,
+                        selection_params=XML.tostring(params, encoding='unicode'))
+            return root
+
+    def confirm_template_user_selection(self, selection, tree_path):
+        """Confirm the chosen user and finish 200607 with it; returns the updated editor."""
+        with self._lock:
+            params = self._confirm_user_selection(selection, tree_path)
+            editor = dict(selection['editor'])
+            result = self._template_command(editor['session_id'], 'endCommand', 200607, self.workflow_params(params))
+            tasks = editor['tasks']
+            self._update_template_editor(editor, result)
+            if editor['tasks'] is tasks:
+                editor['tasks'] = self.fetch_template_tasks(editor['session_id'])
+            return editor
+
+    def cancel_template_user_selection(self, selection):
+        with self._lock:
+            try:
+                self.close_user_selection(selection['selection_session'])
+            finally:
+                self.workflow_call('endCommand',
+                    f'<sessionid xmlns="">{escape(selection["editor"]["session_id"])}</sessionid>'
+                    '<commandid xmlns="">200607</commandid><serviceParams xmlns=""><version>0</version></serviceParams>')
+
+    def save_workflow_template(self, editor, changes, row_changes):
+        """Save (1002 "Übernehmen"), close the details session (1001) and return the list state."""
+        with self._lock:
+            params = self.workflow_params(XML.fromstring(editor['params']), 'param')
+            result = None
+            for operation, command, content in (
+                ('startCommand', 1002, self._template_changes(changes, row_changes) + params),
+                ('endCommand', 1002, '<serviceParams xmlns=""><version>0</version></serviceParams>'),
+                ('startCommand', 1001, '<changedAttributes xmlns=""/>' + params),
+                ('endCommand', 1001, '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key>'
+                                     '<value xsi:type="xsd:int">1001</value></entries><version>0</version></serviceParams>')):
+                result = self._template_command(editor['session_id'], operation, command, content)
+            if editor.get('list_command', True):
+                self._end_template_editor_command({'session_id': editor['list_session']}, result)
+            return self._template_list_after_editor(editor)
+
+    def cancel_workflow_template_editor(self, editor):
+        with self._lock:
+            try:
+                result = self._template_command(editor['session_id'], 'endCommand', 1003,
+                    '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key>'
+                    '<value xsi:type="xsd:int">1003</value></entries><version>0</version></serviceParams>')
+            except Exception:
+                self.close_user_selection(editor['session_id'])
+                result = None
+            if editor.get('list_command', True):
+                self._end_template_editor_command({'session_id': editor['list_session']}, result)
+            return self._template_list_after_editor(editor)
+
+    def _end_template_editor_command(self, state, result):
+        """Finish command 200401 in the list session with the parameters the details session returned."""
+        params = result.find('serviceParams') if result is not None else None
+        self.workflow_call('endCommand',
+            f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">200401</commandid>'
+            + (self.workflow_params(params) if params is not None else '<serviceParams xmlns=""><version>0</version></serviceParams>'))
+
+    def open_stellvertreter_management(self):
+        tenant = self.tenant_id()
         with self._lock:
             context = self.workflow_call('createServiceSession',
                 '<serviceName xmlns="">STELLVERTRETUNGADMINISTRATION</serviceName><serviceParams xmlns="">'
@@ -1320,23 +1764,29 @@ visible="false" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0"
                         selection_params=XML.tostring(params, encoding='unicode'))
             return root
 
-    def confirm_stellvertreter_selection(self, selection, tree_path):
-        with self._lock:
-            prefix = f'<sessionid xmlns="">{escape(selection["selection_session"])}</sessionid>'
-            tree = f'''<simpleAttributes identifier="tree" idvalue="0" maxLength="0" behavior="0">
+    def _confirm_user_selection(self, selection, tree_path):
+        """Select a user (202705) and close a server-requested NUTZERAUSWAHL session; returns its params."""
+        prefix = f'<sessionid xmlns="">{escape(selection["selection_session"])}</sessionid>'
+        tree = f'''<simpleAttributes identifier="tree" idvalue="0" maxLength="0" behavior="0">
 <value>{escape(tree_path)}</value><attributeType>0</attributeType><drawType>0</drawType>
 <comcode>0</comcode><changeTyp>3</changeTyp><master>false</master><slave>false</slave></simpleAttributes>'''
-            for operation, command, content in (
-                ('startCommand', 202705, f'<changedAttributes xmlns="">{tree}</changedAttributes><param xmlns=""><version>0</version></param>'),
-                ('endCommand', 202705, '<serviceParams xmlns=""><version>0</version></serviceParams>'),
-                ('startCommand', 1001, '<changedAttributes xmlns=""/>' + self.workflow_params(XML.fromstring(selection['selection_params']), 'param')),
-                ('endCommand', 1001, '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key><value xsi:type="xsd:int">1001</value></entries><version>0</version></serviceParams>')):
-                result = self.workflow_call(operation, prefix + f'<commandid xmlns="">{command}</commandid>' + content).find('return')
-                if result is not None and result.get('serviceName'):
-                    raise ValueError('Der Server hat die Nutzerauswahl nicht bestätigt.')
-            params = result.find('serviceParams') if result is not None else None
-            if params is None or params.find("entries[key='userList']") is None:
-                raise ValueError('Der Server hat keine ausgewählten Nutzer geliefert.')
+        result = None
+        for operation, command, content in (
+            ('startCommand', 202705, f'<changedAttributes xmlns="">{tree}</changedAttributes><param xmlns=""><version>0</version></param>'),
+            ('endCommand', 202705, '<serviceParams xmlns=""><version>0</version></serviceParams>'),
+            ('startCommand', 1001, '<changedAttributes xmlns=""/>' + self.workflow_params(XML.fromstring(selection['selection_params']), 'param')),
+            ('endCommand', 1001, '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key><value xsi:type="xsd:int">1001</value></entries><version>0</version></serviceParams>')):
+            result = self.workflow_call(operation, prefix + f'<commandid xmlns="">{command}</commandid>' + content).find('return')
+            if result is not None and result.get('serviceName'):
+                raise ValueError('Der Server hat die Nutzerauswahl nicht bestätigt.')
+        params = result.find('serviceParams') if result is not None else None
+        if params is None or params.find("entries[key='userList']") is None:
+            raise ValueError('Der Server hat keine ausgewählten Nutzer geliefert.')
+        return params
+
+    def confirm_stellvertreter_selection(self, selection, tree_path):
+        with self._lock:
+            params = self._confirm_user_selection(selection, tree_path)
             result = self.workflow_call('endCommand',
                 f'<sessionid xmlns="">{escape(selection["management_session"])}</sessionid><commandid xmlns="">205000</commandid>'
                 + self.workflow_params(params)).find('return')

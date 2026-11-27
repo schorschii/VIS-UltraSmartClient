@@ -182,7 +182,19 @@ All IDs below are sent by the current implementation. Except where a sequence ex
 | `202705` | Select user in Stellvertreter picker | `NUTZERAUSWAHL` session; start sets simple attribute `tree` to the node’s `selectedValue` (e.g. `0/3/(172)`), then plain end with version `0`. |
 | `205000` | Add Stellvertreter | Start in `STELLVERTRETUNGADMINISTRATION` opens `NUTZERAUSWAHL`. After `202705` and `1001`, end in the administration session passes the returned `userList`, followed by `1002` start/end in that same session. |
 | `205001` | Delete Stellvertreter | In `STELLVERTRETUNGADMINISTRATION`, select the server row index in `tableStellvertreter`; start has empty `param` version `0`, end has empty `serviceParams` version `0`. Then send `1002` start/end in the same session before refreshing both Stellvertreter lists. |
+| `200401` | Create workflow template (Geschäftsgangmuster) | In `GGVMUSTERVERWALTUNG` (list session): start sets simple attribute `objektartId` by ID only (`idvalue`, no `value`, `changeTyp=2`) and returns `GGVMUSTERVERWALTUNG_DETAILS`. End in the list session after the details session closes, passing its returned parameters. Leaves the list session filtered to that object kind. |
+| `200402` | Delete workflow template | In `GGVMUSTERVERWALTUNG`, select the `iter@trefferliste` row by server index. Start may return `MESSAGE` (types `2`/`6`, `commandId=200402`); end answers `messagereturn=1` (byte). On rejection send a plain end with version `0`. No `1002` needed; reload the list afterwards. |
+| `200600` | Add task to template ("GGV hinzufügen") | In `GGVMUSTERVERWALTUNG_DETAILS`; start carries pending field/row edits, plain end with version `0`. |
+| `200601` | Remove template task ("GGV entfernen") | Details session; all `ggvermerke` rows sent, the target row selected (`__select=1`), plus pending edits; plain end. |
+| `200602` | Move template task up ("GGV nach oben") | As `200601` |
+| `200603` | Move template task down ("GGV nach unten") | As `200601` |
+| `200604` | Template task as own stage ("Neue Stufe") | As `200601` |
+| `200605` | Template task like previous stage ("Wie vorherige Stufe") | As `200601` |
+| `200606` | Template task like next stage ("Wie nachfolgende Stufe") | As `200601` |
+| `200607` | Select "Erlassen für" of a template task | Column command of `erlassen_fuer_id` (no menu label). **No sample; modelled on `205000`.** Start as `200601` should return `NUTZERAUSWAHL`; after `202705` and `1001` in that session, end `200607` in the details session with the returned `userList`. Cancelling: `cancel` the selection session, then plain end `200607`. |
 | `1470100018` | Load my tasks | Tasks service session; start only, tracked version |
+
+The details session `GGVMUSTERVERWALTUNG_DETAILS` also uses `1002` (apply, with all pending edits in bulk), `1001` (close, `SERVICE_END_COMMAND=1001`) and `1003` (cancel, end only with `SERVICE_END_COMMAND=1003`; fall back to `cancel`); see [Workflow template administration](#workflow-template-administration).
 
 Stellvertreter deletion uses command `205001` in the management session. It selects the row in `tableStellvertreter`, sends `205001` start/end followed by `1002` start/end, and refreshes both the management list and `getStellvertreterFuerList`.
 
@@ -378,6 +390,8 @@ The parameter list above is illustrative: copy the **entire actual returned list
 | `GGVEDIT` | Parameters returned by command `6154` |
 | `GGVMUSTERVERWALTUNG` | Parameters returned by `3028` |
 | `BEARBEITEN` | Parameters returned by `5020` |
+| `GGVMUSTERVERWALTUNG` (administration) | Ribbon "Geschäftsgangmuster-Verwaltung": only `mandant` (string, in braces); kept open while the window is open |
+| `GGVMUSTERVERWALTUNG_DETAILS` | New template: parameters returned by `200401`. Existing template: `zeiEnabled="0"` (string), `ggvmusterId` (int), `nutzerauswahl_options=536870976` (int), `nutzerauswahl_mode=299` (int), `mandant` (string), `objektartId` (int) |
 | `NUTZERAUSWAHL` | `mode=299` (int), `options=1610612800` (int), `artFilter` xList of ints 1/2/3 with version 1, empty `artAuswahlBlacklist` entry, tenant string in braces |
 | `STARTSEITEAUFGABEN_SIMPLE_SMART` | Fixed task overview parameters listed below |
 
@@ -685,3 +699,14 @@ item tracks the last acknowledged switch, not the list entry's `active` flag.
 Task and Wiedervorlagen deletion is available from the row context menu in edit mode. Tasks use `3004`, Wiedervorlagen use `3021`: `startCommand` selects the server row index in `ggvermerke` or `wiedervorlagen`, then `endCommand` sends empty service parameters with version 0. Deletions remain pending until the object is saved.
 
 Stellvertreterverwaltung is available in the Start ribbon. It creates `STELLVERTRETUNGADMINISTRATION` with `PARAM_ADD_COMPLEX_ATTR=tableStellvertreter` and the current tenant, then loads `tableStellvertreter`. Adding starts `205000`, opens the returned `NUTZERAUSWAHL` service, selects the tree `selectedValue` with `202705` start/end, completes `1001` start/end, and returns the server-provided `userList` through `205000` end, followed by `1002` start/end in the administration session before refreshing the lists. Deletion uses `205001` start/end with the selected server row index in `tableStellvertreter`, followed by `1002` start/end in the same administration session. Successful changes refresh `getStellvertreterFuerList` and the management list.
+
+## Workflow template administration
+
+- Open: `createServiceSession(GGVMUSTERVERWALTUNG)` with `mandant` → `getComboLists objektartId` (object kinds; `-1` "- Alle -" is the filter, not a kind) → `getComplexAttributes`/`getComplexAttribute iter@trefferliste` (columns `objektart_id`, `Name`, `Description`, `Owner`, `MusterId`).
+- New: `200401` start in the list session → `createServiceSession(GGVMUSTERVERWALTUNG_DETAILS)` with the returned parameters. Kategorien for task rows: `getComboLists kategorie` in the details session.
+- Edit: `createServiceSession(GGVMUSTERVERWALTUNG_DETAILS)` directly with the fixed parameters above; no list command waits for it.
+- Task commands: `200600`–`200607` start/end in the details session (table above). Row edits (`aufgabe`, `termin`, `freigabe` as values with `changeTyp=3`; `kategorie` by ID only, `changeTyp=2`) are sent with the next command.
+- Save: `1002` start (all pending edits, `param` = editor parameters) / end → `1001` start / end with `SERVICE_END_COMMAND=1001` → for new templates `200401` end in the list session with the returned parameters, then a fresh list session (the old one stays filtered). Existing templates: reload the same list session.
+- Cancel: `1003` end with `SERVICE_END_COMMAND=1003` (fallback `cancel`) → `200401` end for new templates.
+- Delete: `200402` (table above).
+- Server `MESSAGE` responses of type `1` are informational (shown with an info icon), type `3` errors, others warnings.
