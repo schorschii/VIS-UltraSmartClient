@@ -1201,6 +1201,100 @@ visible="true" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0">
             except Exception:
                 pass
 
+    def open_paste(self, source_id, source_kind, target_kind):
+        """Start "Einfügen als …": open a session for the copied object and query the Bezugstypen
+        (getPossibleBezugTyp for the target object kind). Returns {'source_session', 'types': [(text, id)]}."""
+        with self._lock:
+            context = self.workflow_call('createGetBoSession',
+                f'<obj_id xmlns="">{int(source_id)}</obj_id><obj_typ xmlns="">{int(source_kind)}</obj_typ>').find('return')
+            if context is None or not context.get('instanceId'):
+                raise ValueError('Das kopierte Objekt ist nicht mehr verfügbar.')
+            editor = {'source_session': context.get('instanceId')}
+            try:
+                combos = self.workflow_call('getPossibleBezugTyp',
+                    f'<sessionId xmlns="">{escape(editor["source_session"])}</sessionId>'
+                    f'<zielBoType xmlns="">{int(target_kind)}</zielBoType>')
+                editor['types'] = [(item.findtext('text') or '', item.findtext('id'))
+                                   for combo in combos.findall('return')
+                                   for item in combo.findall('itemList') if item.findtext('id') is not None]
+                if not editor['types']:
+                    raise ValueError('Für dieses Zielobjekt sind keine Bezugstypen möglich.')
+                return editor
+            except Exception:
+                self._cancel_session(editor['source_session'])
+                raise
+
+    def paste_reference(self, editor, source_id, source_kind, target_id, target_kind, type_id, remark):
+        """Add the copied object as a Bezug of the target object and save it: 9117 start with the Bezugstyp
+        and Bemerkung (rule.bezuege.attributes), 9117 end with SelectedObjects, then 1002 and 1007.
+        Closes the copied object's session afterwards."""
+        with self._lock:
+            context = self.workflow_call('createGetBoSession',
+                f'<obj_id xmlns="">{int(target_id)}</obj_id><obj_typ xmlns="">{int(target_kind)}</obj_typ>').find('return')
+            if context is None or not context.get('instanceId'):
+                raise ValueError('Keine Objektsitzung für das Zielobjekt vorhanden.')
+            session = context.get('instanceId')
+            collection = next((entry.findtext('value') for entry in context.findall('serviceParams/entries')
+                               if entry.findtext('key') == 'bo.update.ignore.collection'), None)
+            ignore = '' if collection is None else (
+                '<entries><key xsi:type="xsd:string">bo.update.ignore.collection</key>'
+                f'<value xsi:type="xsd:string">{escape(collection)}</value></entries>')
+            prefix = f'<sessionid xmlns="">{escape(session)}</sessionid>'
+            auslauf = ('<simpleAttributes identifier="auslauf" idvalue="0" maxLength="0" behavior="0"><value/>'
+                       '<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>3</changeTyp>'
+                       '<master>false</master><slave>false</slave></simpleAttributes>')
+            rule = ('<entries><key xsi:type="xsd:string">rule.bezuege.attributes</key><value xsi:type="q1:xMap">'
+                    f'<entries><key xsi:type="xsd:string">bezugstyp_id</key><value xsi:type="xsd:int">{int(type_id)}</value></entries>'
+                    f'<entries><key xsi:type="xsd:string">bemerkung</key><value xsi:type="xsd:string">{escape(remark)}</value></entries>'
+                    '<version>0</version></value></entries>')
+            selected = ('<entries><key xsi:type="xsd:string">SelectedObjects</key><value xsi:type="q1:xList">'
+                        '<entries xsi:type="q1:xMap">'
+                        f'<entries><key xsi:type="xsd:string">obj_id</key><value xsi:type="xsd:long">{int(source_id)}</value></entries>'
+                        f'<entries><key xsi:type="xsd:string">objektart_id</key><value xsi:type="xsd:long">{int(source_kind)}</value></entries>'
+                        '<version>0</version></entries><version>0</version></value></entries>')
+            steps = (
+                ('startCommand', 9117, f'<changedAttributes xmlns="">{auslauf}</changedAttributes>'
+                                       f'<param xmlns="">{rule}{ignore}<version>0</version></param>'),
+                ('endCommand', 9117, f'<serviceParams xmlns="">{selected}<version>0</version></serviceParams>'),
+                ('startCommand', 1002, f'<changedAttributes xmlns=""/><param xmlns="">{ignore}<version>0</version></param>'),
+                ('endCommand', 1002, '<serviceParams xmlns=""><version>0</version></serviceParams>'),
+                ('startCommand', 1007, '<changedAttributes xmlns=""/><param xmlns=""><version>0</version></param>'),
+                ('endCommand', 1007, '<serviceParams xmlns=""><version>0</version></serviceParams>'))
+            try:
+                for operation, command, content in steps:
+                    result = self.workflow_call(operation,
+                        prefix + f'<commandid xmlns="">{command}</commandid>' + content).find('return')
+                    service = result.get('serviceName') if result is not None else None
+                    # 9117 start may ask for the objects to refer to; its end answers with SelectedObjects.
+                    if service and (service == 'MESSAGE' or (operation, command) != ('startCommand', 9117)):
+                        params = {entry.findtext('key'): entry.findtext('value')
+                                  for entry in result.findall('serviceParams/entries')}
+                        raise ValueError((params.get('message') or '').strip()
+                                         or 'Der Server hat den Bezug nicht angelegt.')
+                    errors = [''.join(message.itertext()).strip() for message in result.iter('messages')
+                              if message.get('type') == '3'] if result is not None else []
+                    if errors:
+                        raise ValueError('\n'.join(errors))
+            except Exception:
+                try:
+                    self.cancel_property_edit(session)
+                except Exception:
+                    pass
+                raise
+            finally:
+                self._cancel_session(session)
+                self._cancel_session(editor['source_session'])
+
+    def close_paste(self, editor):
+        with self._lock:
+            self._cancel_session(editor['source_session'])
+
+    def _cancel_session(self, session_id):
+        try:
+            self.workflow_call('cancel', f'<sessionid xmlns="">{escape(session_id)}</sessionid>')
+        except Exception:
+            pass
+
     def open_link_editor(self, object_id, object_kind, state):
         """Start "new link" (2039) in the object session and open the LINKS service it asks for."""
         with self._lock:

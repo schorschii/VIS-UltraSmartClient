@@ -26,6 +26,7 @@ from .table_sort import SORT_ROLE, SortableItem, enable_sorting, sorting_suspend
 from .richclient_config import custom_wizard_fields
 from .mail_options import MailOptionsDialog
 from .file_templates import FileTemplateDialog
+from .paste_dialog import PasteDialog
 from .workflow_template_management import WorkflowTemplateManagementDialog
 
 
@@ -2273,9 +2274,9 @@ class Client(QMainWindow):
             ],
             [
                 ('Zwischenablage', [
-                    ('Kopieren', None, 'ribbon-copy.svg'),
+                    ('Kopieren', 'copy', 'ribbon-copy.svg'),
                     ('Ausschneiden', None, 'ribbon-cut.svg'),
-                    ('Einfügen\nals …', None, 'ribbon-paste.svg')
+                    ('Einfügen\nals …', 'paste', 'ribbon-paste.svg')
                 ]),
                 ('Favorit', [
                     ('Als\nFavorit', 'favorite', 'ribbon-favorite.svg')
@@ -3503,6 +3504,26 @@ class Client(QMainWindow):
                 self.statusBar().showMessage('Historie ist noch nicht geladen. Bitte gegebenenfalls das Objekt neu laden.')
             else:
                 ObjectHistoryDialog(self._object_history, self).exec()
+        elif action == 'copy':
+            entry = self._current_entry
+            if self.api is None or not entry or entry.get('repository') or entry.get('object_kind') is None:
+                self.statusBar().showMessage('Bitte zuerst ein VIS-Objekt auswählen.')
+            else:
+                self._clipboard_entry = dict(entry)
+                self.statusBar().showMessage('Kopiert: ' + entry.get('name', ''))
+        elif action == 'paste':
+            entry, source = self._current_entry, getattr(self, '_clipboard_entry', None)
+            if self.api is None or not entry or entry.get('repository') or entry.get('object_kind') is None:
+                self.statusBar().showMessage('Bitte zuerst das Zielobjekt auswählen.')
+            elif source is None:
+                self.statusBar().showMessage('Bitte zuerst ein Objekt kopieren.')
+            elif source['id'] == entry['id']:
+                self.statusBar().showMessage('Ein Objekt kann nicht in sich selbst eingefügt werden.')
+            elif not self.property_edit_active():
+                dialog = PasteDialog(self.api, source, entry, self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    self.reload_object_tables()
+                    self.statusBar().showMessage('Bezug angelegt: ' + source.get('name', ''))
         elif action == 'file-template':
             entry = self._current_entry
             if self.api is None or not entry or entry.get('repository') or entry.get('object_kind') is None:
