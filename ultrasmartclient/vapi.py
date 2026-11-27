@@ -1023,6 +1023,184 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                         state['links'] = [values(row) for row in changed_links.findall('rows')]
             return state
 
+    def open_file_templates(self, object_id, object_kind):
+        """Start "Datei aus Vorlage" (9006) in a new object session and open the VORLAGEN service.
+
+        Returns the editor with the Vorlagenkategorien ([(text, id)]) and the preselected category id."""
+        with self._lock:
+            context = self.workflow_call('createGetBoSession',
+                f'<obj_id xmlns="">{int(object_id)}</obj_id><obj_typ xmlns="">{int(object_kind)}</obj_typ>').find('return')
+            if context is None or not context.get('instanceId'):
+                raise ValueError('Keine Objektsitzung vorhanden.')
+            editor = {'object_session': context.get('instanceId'), 'session_id': None}
+            try:
+                result = self.workflow_call('startCommand',
+                    f'<sessionid xmlns="">{escape(editor["object_session"])}</sessionid><commandid xmlns="">9006</commandid>'
+                    '<changedAttributes xmlns=""/><param xmlns=""><version>0</version></param>').find('return')
+                editor['command_started'] = True
+                if result is None or result.get('serviceName') != 'VORLAGEN' or result.find('serviceParams') is None:
+                    raise ValueError('Der Server hat keine Vorlagenauswahl geliefert.')
+                editor['params'] = XML.tostring(result.find('serviceParams'), encoding='unicode')
+                service = self.workflow_call('createServiceSession',
+                    '<serviceName xmlns="">VORLAGEN</serviceName>' + self.workflow_params(result.find('serviceParams'))).find('return')
+                if service is None or not service.get('instanceId'):
+                    raise ValueError('Keine Sitzung für die Vorlagenauswahl vorhanden.')
+                editor['session_id'] = service.get('instanceId')
+                current = service.find("simpleAttributes[@identifier='vorlagenKategorie']")
+                editor['category_id'] = current.get('idvalue') if current is not None else None
+                combos = self.workflow_call('getComboLists',
+                    f'<sessionid xmlns="">{escape(editor["session_id"])}</sessionid>'
+                    '<attrIds xmlns="">vorlagenKategorie</attrIds>')
+                editor['categories'] = [(item.findtext('text') or '', item.findtext('id'))
+                                        for combo in combos.findall('return')
+                                        if combo.findtext('identifier') == 'vorlagenKategorie'
+                                        for item in combo.findall('itemList') if item.findtext('id') is not None]
+                if not editor['categories']:
+                    raise ValueError('Der Server hat keine Vorlagenkategorien geliefert.')
+                return editor
+            except Exception:
+                self._close_file_templates(editor)
+                raise
+
+    def fetch_file_templates(self, editor, category_id):
+        """Vorlagen of one category (203800 with vorlagenKategorie, then iter@vorlagenTableFile).
+
+        The server rebuilds the list at the 203800 end, so it is read afterwards.
+
+        Returns {'columns': [(identifier, name)], 'rows': [{identifier: value, '_session_index': n}]}."""
+        with self._lock:
+            category = f'''<simpleAttributes identifier="vorlagenKategorie" idvalue="{int(category_id)}" maxLength="0" behavior="0">
+<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>2</changeTyp>
+<master>false</master><slave>false</slave></simpleAttributes>'''
+            prefix = f'<sessionid xmlns="">{escape(editor["session_id"])}</sessionid>'
+            command = prefix + '<commandid xmlns="">203800</commandid>'
+            try:
+                self.workflow_call('startCommand', command
+                    + f'<changedAttributes xmlns="">{category}</changedAttributes><param xmlns=""><version>0</version></param>')
+            finally:
+                self.workflow_call('endCommand', command + '<serviceParams xmlns=""><version>0</version></serviceParams>')
+            return self._read_file_templates(editor['session_id'])
+
+    def _read_file_templates(self, session_id):
+        """Read iter@vorlagenTableFile; this also sets up the row indices the server accepts for a selection."""
+        response = self.workflow_call('getComplexAttributes', f'<sessionid xmlns="">{escape(session_id)}</sessionid>'
+                                      '<identifiers xmlns="">iter@vorlagenTableFile</identifiers>')
+        collection = next((item for item in response.findall('return')
+                           if item.get('identifier') in (None, 'iter@vorlagenTableFile')), None)
+        columns, rows = {}, []
+        for row in collection.findall('rows') if collection is not None else ():
+            values = {}
+            for column in row.findall('columns'):
+                identifier = column.get('identifier')
+                if not identifier or identifier.startswith('__'):
+                    continue
+                values[identifier] = column.findtext('value') or ''
+                name = column.get('name')
+                columns.setdefault(identifier, name if name and name != 'noname' else identifier)
+            values['_session_index'] = int(row.get('index', len(rows)))
+            rows.append(values)
+        return {'columns': list(columns.items()), 'rows': rows}
+
+    def create_file_from_template(self, editor, category_id, template_name, extension, filename, index, indices=()):
+        """Create a file from a Vorlage: 203800 with category, extension and names, 1001 in the VORLAGEN
+        session with the chosen row selected, then 9006 end in the object session with the "vorlage" parameter
+        (id, name, path) the 1001 end returns; closes the object session.
+
+        A server prompt or error message (e.g. an invalid file name) raises and leaves the sessions open."""
+        with self._lock:
+            fields = f'''<simpleAttributes identifier="vorlagenKategorie" idvalue="{int(category_id)}" maxLength="0" behavior="0">
+<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>2</changeTyp>
+<master>false</master><slave>false</slave></simpleAttributes>''' + ''.join(
+                f'''<simpleAttributes identifier="{identifier}" idvalue="0" maxLength="0" behavior="0">
+<value>{escape(value)}</value><attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode>
+<changeTyp>3</changeTyp><master>false</master><slave>false</slave></simpleAttributes>'''
+                for identifier, value in (('extension', extension), ('fileNameChanged', filename), ('filename', template_name)))
+            session = editor['session_id']
+            try:
+                self._template_command(session, 'startCommand', 203800,
+                    f'<changedAttributes xmlns="">{fields}</changedAttributes><param xmlns=""><version>0</version></param>')
+            finally:
+                self.workflow_call('endCommand', f'<sessionid xmlns="">{escape(session)}</sessionid>'
+                    '<commandid xmlns="">203800</commandid><serviceParams xmlns=""><version>0</version></serviceParams>')
+            # 203800 rebuilds the Vorlagen list and drops the selection. 1001 needs the chosen row selected
+            # ("Bitte wählen Sie eine Zeile aus!"), and only a list read afterwards has row indices
+            # ("kein index für liste:vorlagenTableFile").
+            listing = self._read_file_templates(session)
+            indices = [row['_session_index'] for row in listing['rows']]
+            index = next((row['_session_index'] for row in listing['rows']
+                          if row.get('vorlagenName') == template_name + extension), int(index))
+            if index not in indices:
+                raise ValueError('Die Vorlage ist nicht mehr vorhanden. Bitte die Kategorie neu auswählen.')
+            rows = ''.join(f'''<rows focused="{str(row == index).lower()}" selected="{str(row == index).lower()}" style="0" styleColor="0"
+visible="true" index="{row}" dragDropDataObjId="0" dragDropTyp="0" uniqueId="0">
+<columns identifier="__select" idvalue="0" maxLength="0" behavior="0"><value>{int(row == index)}</value>
+<attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode><changeTyp>3</changeTyp>
+<master>false</master><slave>false</slave></columns></rows>''' for row in indices)
+            selection = f'<complexAttributes behavior="0" identifier="iter@vorlagenTableFile">{rows}</complexAttributes>'
+            self._template_command(session, 'startCommand', 1001, f'<changedAttributes xmlns="">{selection}</changedAttributes>'
+                + self.workflow_params(XML.fromstring(editor['params']), 'param'))
+            result = self._template_command(session, 'endCommand', 1001,
+                '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key>'
+                '<value xsi:type="xsd:int">1001</value></entries><version>0</version></serviceParams>')
+            errors = [''.join(message.itertext()).strip() for message in result.iter('messages')
+                      if message.get('type') == '3'] if result is not None else []
+            if errors:
+                raise ValueError('\n'.join(errors))
+            vorlage = result.find("serviceParams/entries[key='vorlage']") if result is not None else None
+            if vorlage is None:
+                raise ValueError('Der Server hat keine Vorlage für die neue Datei geliefert.')
+            # 1001 closed the VORLAGEN session; 9006 is ended here, then only the object session remains.
+            editor['session_id'] = None
+            editor['command_started'] = False
+            params = XML.Element('serviceParams')
+            params.append(vorlage)
+            XML.SubElement(params, 'version').text = '0'
+            try:
+                result = self.workflow_call('endCommand',
+                    f'<sessionid xmlns="">{escape(editor["object_session"])}</sessionid><commandid xmlns="">9006</commandid>'
+                    + self.workflow_params(params)).find('return')
+                if result is not None and result.get('serviceName'):
+                    messages = {entry.findtext('key'): entry.findtext('value')
+                                for entry in result.findall('serviceParams/entries')}
+                    raise ValueError((messages.get('message') or '').strip()
+                                     or 'Der Server hat die Datei nicht angelegt.')
+            finally:
+                self._close_file_templates(editor)
+            return filename + extension
+
+    def close_file_templates(self, editor):
+        with self._lock:
+            self._close_file_templates(editor)
+
+    def _close_file_templates(self, editor):
+        """Cancel the VORLAGEN session (1003 start/end), finish 9006 and close the object session.
+
+        Failures are ignored so that every remaining session is still closed."""
+        params = None
+        if editor.get('session_id'):
+            prefix = f'<sessionid xmlns="">{escape(editor["session_id"])}</sessionid><commandid xmlns="">1003</commandid>'
+            try:
+                self.workflow_call('startCommand', prefix
+                    + '<changedAttributes xmlns=""/><param xmlns=""><version>0</version></param>')
+                result = self.workflow_call('endCommand', prefix
+                    + '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key>'
+                      '<value xsi:type="xsd:int">1003</value></entries><version>0</version></serviceParams>').find('return')
+                params = result.find('serviceParams') if result is not None else None
+            except Exception:
+                pass
+        steps = []
+        if editor.get('command_started'):
+            steps.append(('endCommand', f'<sessionid xmlns="">{escape(editor["object_session"])}</sessionid>'
+                          '<commandid xmlns="">9006</commandid>'
+                          + (self.workflow_params(params) if params is not None
+                             else '<serviceParams xmlns=""><version>0</version></serviceParams>')))
+        steps.append(('cancel', f'<sessionid xmlns="">{escape(editor["object_session"])}</sessionid>'))
+        for operation, content in steps:
+            try:
+                self.workflow_call(operation, content)
+            except Exception:
+                pass
+
     def open_link_editor(self, object_id, object_kind, state):
         """Start "new link" (2039) in the object session and open the LINKS service it asks for."""
         with self._lock:

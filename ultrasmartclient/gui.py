@@ -25,6 +25,7 @@ from .theme import ThemeManager
 from .table_sort import SORT_ROLE, SortableItem, enable_sorting, sorting_suspended
 from .richclient_config import custom_wizard_fields
 from .mail_options import MailOptionsDialog
+from .file_templates import FileTemplateDialog
 from .workflow_template_management import WorkflowTemplateManagementDialog
 
 
@@ -2316,7 +2317,7 @@ class Client(QMainWindow):
                     ('Schlagworte', None, 'ribbon-keywords.svg')
                 ]),
                 ('Datei', [
-                    ('Datei aus\nVorlage', None, 'ribbon-template.svg'),
+                    ('Datei aus\nVorlage', 'file-template', 'ribbon-template.svg'),
                     ('Hochladen', 'upload', 'ribbon-upload.svg'),
                     ('Scannen', None, 'ribbon-scan.svg')
                 ]),
@@ -3502,6 +3503,15 @@ class Client(QMainWindow):
                 self.statusBar().showMessage('Historie ist noch nicht geladen. Bitte gegebenenfalls das Objekt neu laden.')
             else:
                 ObjectHistoryDialog(self._object_history, self).exec()
+        elif action == 'file-template':
+            entry = self._current_entry
+            if self.api is None or not entry or entry.get('repository') or entry.get('object_kind') is None:
+                self.statusBar().showMessage('Bitte zuerst ein VIS-Objekt auswählen.')
+            else:
+                dialog = FileTemplateDialog(self.api, entry['id'], entry['object_kind'], self)
+                if dialog.exec() == QDialog.DialogCode.Accepted and dialog.created_file:
+                    self.refresh_current_files(entry['id'])
+                    self.statusBar().showMessage('Datei angelegt: ' + dialog.created_file)
         elif action == 'upload':
             if not self.can_upload_files():
                 return
