@@ -4,6 +4,15 @@ import argparse
 import os
 import sys
 
+if sys.platform == 'win32':
+    # Validate TLS certificates against the Windows certificate store (including
+    # company root CAs deployed by group policy) instead of certifi's bundle only.
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+
 from PyQt6.QtCore import QLibraryInfo, QLocale, QTimer, QTranslator
 from PyQt6.QtWidgets import QApplication, QMessageBox
 

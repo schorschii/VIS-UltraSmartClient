@@ -12,7 +12,9 @@ python -m venv .venv
 ```
 
 pip installs winkerberos as a prebuilt wheel; on Windows, python-gssapi and
-requests-gssapi are not installed. The script uses the existing environment and does not install dependencies.
+requests-gssapi are not installed. [truststore](https://github.com/sethmlarson/truststore)
+is installed too, so the client validates TLS certificates against the Windows
+certificate store (including company root CAs) rather than certifi's bundle. The script uses the existing environment and does not install dependencies.
 
 The output is `dist/windows/UltraSmartClient.zip`, a portable package. It contains
 the folder `UltraSmartClient/` with the windowed `UltraSmartClient.exe` and its
