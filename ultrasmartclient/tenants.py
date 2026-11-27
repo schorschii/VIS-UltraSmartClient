@@ -4,9 +4,11 @@ import os
 import sys
 from pathlib import Path
 import tempfile
-from urllib.parse import urlsplit
+import threading
+from urllib.parse import urlsplit, urlunsplit
+import xml.etree.ElementTree as XML
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
@@ -32,6 +34,106 @@ def validate_tenant(name, server_url):
     # Accessing port also validates malformed port numbers.
     url.port
     return {'name': name, 'server_url': server_url}
+
+
+def validate_server_url(server_url):
+    """Like validate_tenant, but for a URL entered without a name."""
+    return validate_tenant('-', server_url)['server_url']
+
+
+MANDANTEN_PATH = '/startseite/restpub/mandanten'
+MANDANT_INFO_REQUEST = b'''<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body>
+    <getMandantInfo xmlns="http://services.visj.pdv.de" />
+  </soap:Body>
+</soap:Envelope>'''
+
+
+def parse_mandanten(payload):
+    """[(name, id)] from the server's tenant list (JSON array of {"id", "name", ...}), or None if invalid."""
+    try:
+        data = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    tenants = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            return None
+        identifier, name = entry.get('id'), entry.get('name') or entry.get('description')
+        if not isinstance(identifier, str) or not identifier.strip('{} ') or not isinstance(name, str) or not name.strip():
+            return None
+        tenants.append((name.strip(), identifier.strip().strip('{}')))
+    return tenants
+
+
+def parse_mandant_info(payload):
+    """Tenant name from a getMandantInfoResponse, or None if the payload is none."""
+    try:
+        root = XML.fromstring(payload)
+    except XML.ParseError:
+        return None
+    response = next((node for node in root.iter() if node.tag.rsplit('}', 1)[-1] == 'getMandantInfoResponse'), None)
+    result = response.find('return') if response is not None else None
+    if result is None:
+        return None
+    return (result.findtext('name') or result.findtext('description') or '').strip() or None
+
+
+def discover_tenants(server_url, session=None):
+    """Ask the server which tenants the entered URL offers.
+
+    Returns ('list', [{'name', 'server_url'}]) from /startseite/restpub/mandanten (tried below the entered
+    URL, then at the server root), ('info', name) from getMandantInfo at the entered URL, or ('none', reason).
+    """
+    import requests
+    from .vapi import kerberos_auth
+    server_url = validate_server_url(server_url)
+    if session is None:
+        session = requests.Session()
+        session.auth = kerberos_auth()
+    parts = urlsplit(server_url)
+    root = urlunsplit((parts.scheme, parts.netloc, '', '', ''))
+    reason = ''
+    for list_url in dict.fromkeys((server_url + MANDANTEN_PATH, root + MANDANTEN_PATH)):
+        try:
+            response = session.get(list_url, timeout=(5, 15), allow_redirects=False,
+                                   headers={'Accept': 'application/json'})
+        except requests.RequestException as error:
+            reason = str(error)
+            continue
+        found = parse_mandanten(response.content) if response.ok else None
+        if found:
+            # The entered URL may already be a tenant URL; the ids are appended to its base then.
+            base = server_url
+            last = parts.path.rstrip('/').rsplit('/', 1)[-1].strip('{}').casefold()
+            if last in {identifier.casefold() for _, identifier in found}:
+                base = server_url.rstrip('/').rsplit('/', 1)[0]
+            return 'list', [validate_tenant(name, base + '/' + identifier) for name, identifier in found]
+    try:
+        response = session.post(server_url + '/service/MandantenRepository', data=MANDANT_INFO_REQUEST,
+                                headers={'Content-Type': 'application/soap+xml; charset=utf-8'},
+                                timeout=(5, 15), allow_redirects=False)
+    except requests.RequestException as error:
+        return 'none', str(error) or reason
+    name = parse_mandant_info(response.content)
+    if name:
+        return 'info', name
+    return 'none', f'HTTP {response.status_code}'
+
+
+class DiscoveryWorker(QObject):
+    finished = pyqtSignal(object, str)
+
+    def run(self, server_url):
+        try:
+            result = discover_tenants(server_url)
+        except Exception as error:
+            self.finished.emit(None, str(error))
+        else:
+            self.finished.emit(result, '')
 
 
 def system_tenant_path():
@@ -201,13 +303,18 @@ class TenantSelector(QDialog):
         layout.addLayout(form)
         row = QHBoxLayout()
         self.edit_buttons = []
-        for label, callback in (('Neu', self.new_tenant), ('Speichern', self.save_tenant),
+        for label, callback in (('Neu', self.new_tenant), ('Speichern', self.check_and_save_tenant),
                                 ('Entfernen', self.remove_tenant)):
             button = QPushButton(label)
             button.clicked.connect(callback)
             row.addWidget(button)
             self.edit_buttons.append(button)
         layout.addLayout(row)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.status)
+        self.discovery = None
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         self.login_button = buttons.addButton('Anmelden', QDialogButtonBox.ButtonRole.AcceptRole)
         self.login_button.setIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'icons' / 'login-arrow.svg')))
@@ -255,15 +362,69 @@ class TenantSelector(QDialog):
         self.refresh(selected)
         return True
 
-    def save_tenant(self):
+    def check_and_save_tenant(self):
+        """Speichern: ask the server for its tenants before saving the entered one."""
+        if self.busy:
+            return
+        try:
+            server_url = validate_server_url(self.url.text())
+        except ValueError as error:
+            QMessageBox.warning(self, 'Ungültiger Mandant', str(error))
+            return
+        name, index = self.name.text().strip(), self.tenant_list.currentRow()
+        self.set_busy(True, 'Mandanten werden beim Server abgefragt …')
+        worker = DiscoveryWorker()
+        self.discovery = worker
+        worker.finished.connect(lambda result, error: self.discovered(result, error, name, server_url, index),
+                                Qt.ConnectionType.QueuedConnection)
+        threading.Thread(target=worker.run, args=(server_url,), daemon=True).start()
+
+    def discovered(self, result, error, name, server_url, index):
+        self.discovery = None
+        self.set_busy(False)
+        kind, value = result if result else ('none', error)
+        if kind == 'list':
+            tenants = list(self.tenants)
+            if 0 <= index < len(tenants):
+                del tenants[index]  # the edited entry is replaced by the server's tenants
+            urls = [tenant['server_url'] for tenant in tenants]
+            selected = None
+            for tenant in value:
+                if tenant['server_url'] in urls:
+                    position = urls.index(tenant['server_url'])
+                    tenants[position] = tenant
+                else:
+                    position = len(tenants)
+                    tenants.append(tenant)
+                    urls.append(tenant['server_url'])
+                selected = position if selected is None else selected
+            if self.persist(tenants, selected):
+                self.status.setText(f'{len(value)} Mandant(en) vom Server übernommen.')
+            return
+        if kind == 'info':
+            self.name.setText(name or value)
+            if self.save_tenant(index):
+                self.status.setText('Verbindung zum Mandanten erfolgreich geprüft.')
+            return
+        answer = QMessageBox.question(
+            self, 'Mandant nicht erreichbar',
+            'Mit dem Server konnte nicht kommuniziert werden'
+            + (f' ({value})' if value else '') + '.\n\nSoll der Mandant trotzdem hinzugefügt werden?')
+        if answer == QMessageBox.StandardButton.Yes and self.save_tenant(index):
+            self.status.setText('Mandant ohne Verbindungsprüfung gespeichert.')
+        else:
+            self.status.setText('')
+
+    def save_tenant(self, index=None):
         try:
             tenant = validate_tenant(self.name.text(), self.url.text())
         except ValueError as error:
             QMessageBox.warning(self, 'Ungültiger Mandant', str(error))
             return False
-        index = self.tenant_list.currentRow()
+        if index is None:
+            index = self.tenant_list.currentRow()
         tenants = list(self.tenants)
-        if index < 0:
+        if not 0 <= index < len(tenants):
             index = len(tenants)
             tenants.append(tenant)
         else:
@@ -277,11 +438,12 @@ class TenantSelector(QDialog):
         tenants = self.tenants[:index] + self.tenants[index + 1:]
         self.persist(tenants, min(index, len(tenants) - 1) if tenants else None)
 
-    def set_busy(self, busy):
+    def set_busy(self, busy, message=None):
         self.busy = busy
         for widget in (self.tenant_list, self.name, self.url, self.login_button, *self.edit_buttons):
             widget.setEnabled(not busy)
-        self.login_button.setText('Anmeldung läuft …' if busy else 'Anmelden')
+        self.login_button.setText('Anmeldung läuft …' if busy and message is None else 'Anmelden')
+        self.status.setText(message or '')
 
     def login(self):
         if self.busy:
