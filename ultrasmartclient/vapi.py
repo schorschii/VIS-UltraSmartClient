@@ -1023,6 +1023,90 @@ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Body><{operation} xmlns
                         state['links'] = [values(row) for row in changed_links.findall('rows')]
             return state
 
+    def open_link_editor(self, object_id, object_kind, state):
+        """Start "new link" (2039) in the object session and open the LINKS service it asks for."""
+        with self._lock:
+            if state is None:
+                context = self.workflow_call('createGetBoSession',
+                    f'<obj_id xmlns="">{int(object_id)}</obj_id><obj_typ xmlns="">{int(object_kind)}</obj_typ>').find('return')
+                if context is None or not context.get('instanceId'):
+                    raise ValueError('Keine Objektsitzung vorhanden.')
+                state = self._object_state(context)
+            result = self.workflow_call('startCommand',
+                f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">2039</commandid>'
+                '<changedAttributes xmlns=""/><param xmlns=""><version>0</version></param>').find('return')
+            if result is None or result.get('serviceName') != 'LINKS' or result.find('serviceParams') is None:
+                self._end_link_command(state, None)
+                raise ValueError('Der Server hat keinen Verknüpfungsdialog geliefert.')
+            params = result.find('serviceParams')
+            try:
+                context = self.workflow_call('createServiceSession',
+                    '<serviceName xmlns="">LINKS</serviceName>' + self.workflow_params(params)).find('return')
+                if context is None or not context.get('instanceId'):
+                    raise ValueError('Keine Sitzung für die Verknüpfung vorhanden.')
+            except Exception:
+                self._end_link_command(state, None)
+                raise
+            return {'state': state, 'session_id': context.get('instanceId'),
+                    'params': XML.tostring(params, encoding='unicode')}
+
+    def save_link(self, editor, name, url):
+        """Apply name and URL in the LINKS session (1001), close it and finish 2039 with the result."""
+        with self._lock:
+            fields = ''.join(f'''<simpleAttributes identifier="{identifier}" idvalue="0" maxLength="0" behavior="0">
+<value>{escape(value)}</value><attributeType>0</attributeType><drawType>0</drawType><comcode>0</comcode>
+<changeTyp>3</changeTyp><master>false</master><slave>false</slave></simpleAttributes>''' for identifier, value in (('url', url), ('name', name)))
+            result = None
+            for operation, content in (
+                ('startCommand', f'<changedAttributes xmlns="">{fields}</changedAttributes>'
+                                 + self.workflow_params(XML.fromstring(editor['params']), 'param')),
+                ('endCommand', '<serviceParams xmlns=""><entries><key xsi:type="xsd:string">SERVICE_END_COMMAND</key>'
+                               '<value xsi:type="xsd:int">1001</value></entries><version>0</version></serviceParams>')):
+                # Server prompts (e.g. a missing name) stay in the dialog; the session remains open.
+                result = self._template_command(editor['session_id'], operation, 1001, content)
+            params = result.find('serviceParams') if result is not None else None
+            if params is None or params.find("entries[key='url']") is None:
+                params = XML.fromstring(
+                    '<serviceParams xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+                    'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+                    f'<entries><key xsi:type="xsd:string">name</key><value xsi:type="xsd:string">{escape(name)}</value></entries>'
+                    f'<entries><key xsi:type="xsd:string">url</key><value xsi:type="xsd:string">{escape(url)}</value></entries>'
+                    '<version>0</version></serviceParams>')
+            try:
+                self.close_user_selection(editor['session_id'])  # plain "cancel" closes the service session
+            except Exception:
+                pass
+            return self._end_link_command(editor['state'], params)
+
+    def cancel_link_editor(self, editor):
+        with self._lock:
+            try:
+                self.close_user_selection(editor['session_id'])
+            finally:
+                return self._end_link_command(editor['state'], None)
+
+    def _end_link_command(self, state, params):
+        """End 2039 in the object session (with name/url, or empty when cancelled); returns the new state."""
+        result = self.workflow_call('endCommand',
+            f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><commandid xmlns="">2039</commandid>'
+            + (self.workflow_params(params) if params is not None
+               else '<serviceParams xmlns=""><version>0</version></serviceParams>')).find('return')
+        if params is not None and result is not None and result.get('serviceName'):
+            values = {entry.findtext('key'): entry.findtext('value') for entry in result.findall('serviceParams/entries')}
+            raise ValueError((values.get('message') or '').strip() or 'Der Server hat die Verknüpfung nicht übernommen.')
+        state = dict(state)
+        context = result.find('changedSessionContext') if result is not None else None
+        if context is not None and context.findall('simpleAttributes'):
+            state['attributes'] = parse_property_context(context)
+        collection = context.find("complexAttributes[@identifier='links']") if context is not None else None
+        if collection is None:
+            collection = self.workflow_call('getComplexAttribute',
+                f'<sessionid xmlns="">{escape(state["session_id"])}</sessionid><identifier xmlns="">links</identifier>').find('return')
+        state['links'] = [(row.findtext("columns[@identifier='name']/value") or '',
+                           row.findtext("columns[@identifier='url']/value") or '')
+                          for row in (collection.findall('rows') if collection is not None else [])]
+        return state
+
     def delete_references(self, object_id, object_kind, state, references):
         """Stage reference removal in the object session; saving remains explicit."""
         with self._lock:

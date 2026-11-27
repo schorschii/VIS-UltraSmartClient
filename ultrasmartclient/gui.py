@@ -799,6 +799,82 @@ class WorkflowDialog(QDialog):
             self.run_operation('cancel_workflow_editor', (self.editor,), False)
 
 
+class LinkDialog(QDialog):
+    """Name and URL of a new Verknüpfung, entered in the server's LINKS session."""
+
+    def __init__(self, api, editor, parent=None):
+        super().__init__(parent)
+        self.api, self.editor = api, editor
+        self.worker = None
+        self.result_state = None
+        self.setWindowTitle('Neue Verknüpfung')
+        self.resize(460, 150)
+        layout = QVBoxLayout(self)
+        self.form = QWidget()
+        form = QFormLayout(self.form)
+        form.setContentsMargins(0, 0, 0, 0)
+        self.name = QLineEdit()
+        self.url = QLineEdit()
+        self.url.setPlaceholderText('https://')
+        form.addRow('Name', self.name)
+        form.addRow('URL', self.url)
+        layout.addWidget(self.form)
+        self.error = QLabel()
+        self.error.setWordWrap(True)
+        self.error.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.error)
+        layout.addStretch()
+        self.buttons = QDialogButtonBox()
+        self.apply_button = self.buttons.addButton('Übernehmen', QDialogButtonBox.ButtonRole.AcceptRole)
+        self.apply_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOkButton))
+        cancel_button = self.buttons.addButton('Abbrechen', QDialogButtonBox.ButtonRole.RejectRole)
+        cancel_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
+        self.buttons.accepted.connect(self.apply)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self.name.textChanged.connect(self.update_buttons)
+        self.url.textChanged.connect(self.update_buttons)
+        self.update_buttons()
+        self.name.setFocus()
+
+    def update_buttons(self):
+        self.apply_button.setEnabled(self.worker is None and bool(self.url.text().strip()))
+
+    def apply(self):
+        if self.apply_button.isEnabled():
+            self.run_operation('save_link', (self.editor, self.name.text().strip(), self.url.text().strip()), True)
+
+    def reject(self):
+        if self.worker is None:
+            self.run_operation('cancel_link_editor', (self.editor,), False)
+
+    def closeEvent(self, event):
+        event.ignore()
+        self.reject()
+
+    def run_operation(self, operation, args, accept):
+        self.form.setEnabled(False)
+        self.buttons.setEnabled(False)
+        self.error.setText('Verknüpfung wird gespeichert …' if accept else '')
+        self.worker = WorkflowWorker()
+        self.worker.finished.connect(lambda result, error: self.finished_operation(result, error, accept))
+        threading.Thread(target=self.worker.run, args=(self.api, operation, args), daemon=True).start()
+
+    def finished_operation(self, result, error, accept):
+        self.worker = None
+        self.form.setEnabled(True)
+        self.buttons.setEnabled(True)
+        self.update_buttons()
+        self.result_state = result
+        if accept and error:
+            self.error.setText(error)  # the LINKS session stays open for a correction
+        elif accept:
+            super().accept()
+        else:
+            # Close even if the server rejects the cancel.
+            super().reject()
+
+
 class WorkflowTemplateDialog(QDialog):
     def __init__(self, api, editor, parent=None):
         super().__init__(parent)
@@ -898,7 +974,7 @@ class PropertyEditWorker(QObject):
             method = {'begin': api.begin_property_edit, 'save': api.save_properties,
                       'cancel': api.cancel_property_edit, 'new_task': api.create_workflow_task,
                       'new_reminder': api.create_reminder,
-                      'delete_link': api.delete_link,
+                      'delete_link': api.delete_link, 'open_link': api.open_link_editor,
                       'delete_task': api.delete_workflow_task, 'delete_reminder': api.delete_reminder,
                       'task_command': api.workflow_task_command,
                       'delete_references': api.delete_references,
@@ -1845,23 +1921,34 @@ class Client(QMainWindow):
 
     def links_context_menu(self, position):
         item = self.links.itemAt(position)
-        if item is None:
-            self.table_reload_menu(self.links, position)
-            return
-        self.links.selectRow(item.row())
-        link = self.current_links()[item.row()]
+        can_edit = (self.api is not None and bool(self._current_entry)
+                    and self._current_entry.get('object_kind') is not None and self._property_worker is None)
         menu = QMenu(self)
-        open_action = menu.addAction('URL öffnen')
-        open_action.setEnabled(bool(link[1]))
-        delete_action = menu.addAction('Verknüpfung löschen')
-        delete_action.setEnabled(self.api is not None and bool(self._current_entry)
-                                and self._current_entry.get('object_kind') is not None
-                                and self._property_worker is None)
+        open_action = delete_action = None
+        if item is not None:
+            self.links.selectRow(item.row())
+            link = self.current_links()[item.row()]
+            open_action = menu.addAction('URL öffnen')
+            open_action.setEnabled(bool(link[1]))
+        new_action = menu.addAction('Neue Verknüpfung …')
+        new_action.setEnabled(can_edit)
+        if item is not None:
+            delete_action = menu.addAction('Verknüpfung löschen')
+            delete_action.setEnabled(can_edit)
         menu.addSeparator()
         reload_action = menu.addAction('Neu laden')
         reload_action.setEnabled(self._property_edit is None and self._property_worker is None)
         selected = menu.exec(self.links.viewport().mapToGlobal(position))
-        if selected == open_action:
+        if selected is None:
+            return
+        if selected == new_action:
+            if self._property_edit is not None and not hasattr(self, '_original_links'):
+                self._original_links = self.current_links()
+                self._original_references = list(getattr(self, '_displayed_references', []))
+            # Without an open edit session, cancelling the dialog closes the one opened for it.
+            self._link_session_was_open = self._property_edit is not None
+            self.create_workflow_task('open_link')
+        elif selected == open_action:
             QDesktopServices.openUrl(QUrl(link[1]))
         elif selected == delete_action:
             if self._property_edit is not None and not hasattr(self, '_original_links'):
@@ -2868,6 +2955,17 @@ class Client(QMainWindow):
         elif action == 'unlock':
             self.statusBar().showMessage('Objekt entsperrt.')
             self.reload_object_tables()
+        elif action == 'open_link':
+            dialog = LinkDialog(self.api, result, self)
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            state = dialog.result_state
+            if accepted:
+                self.property_operation_finished('new_link', state, '')
+            elif state is not None and not getattr(self, '_link_session_was_open', True):
+                self._property_edit = state
+                self.run_property_operation('cancel', (state['session_id'],))
+            elif state is not None:
+                self._property_edit = state
         elif action == 'open_template':
             dialog = WorkflowTemplateDialog(self.api, result, self)
             if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -2883,7 +2981,7 @@ class Client(QMainWindow):
                         for key, (value, _idvalue) in dialog.changes.items():
                             task[key] = value.split(';')[2] if key == 'erlassen_fuer_id' and value.startswith('--;') else value
                 self.show_tasks(self._property_edit['tasks'])
-        elif action in ('new_task', 'new_reminder', 'delete_link', 'delete_references', 'delete_task', 'delete_reminder',
+        elif action in ('new_task', 'new_reminder', 'new_link', 'delete_link', 'delete_references', 'delete_task', 'delete_reminder',
                         'task_command'):
             self._property_edit = result
             self.show_properties(result['attributes'])
@@ -2910,6 +3008,8 @@ class Client(QMainWindow):
                 self.statusBar().showMessage('Geschäftsgangverfügungen geändert. Bitte speichern, um die Änderung zu übernehmen.')
             elif action == 'delete_references':
                 self.statusBar().showMessage('Bezüge entfernt. Bitte speichern, um die Änderung zu übernehmen.')
+            elif action == 'new_link':
+                self.statusBar().showMessage('Verknüpfung hinzugefügt. Bitte speichern, um die Änderung zu übernehmen.')
             elif action == 'delete_link':
                 self.statusBar().showMessage('Verknüpfung entfernt. Bitte speichern, um die Änderung zu übernehmen.')
             else:

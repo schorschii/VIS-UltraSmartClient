@@ -164,6 +164,7 @@ All IDs below are sent by the current implementation. Except where a sequence ex
 | `1003` | Cancel object editing or workflow-template selection | Object save prompt is answered with `messagereturn=2` to discard. Template cancellation sends end only with `SERVICE_END_COMMAND=1003`, then ends parent `3028`. |
 | `1007` | Finish/save object | Runs after `1002` for property saves and object creation |
 | `1037` | Begin property editing | Optional `bo.update.ignore.collection` copied from object context |
+| `2039` | Add link (Verknüpfung) | Start in the object session with empty attributes returns `LINKS` → `createServiceSession(LINKS)` with the returned parameters (`mandant`) → `1001` start with simple attributes `url` and `name` (`param` = service parameters), `1001` end with `SERVICE_END_COMMAND=1001` → `cancel` the `LINKS` session → `2039` end in the object session passing the `name`/`url` parameters returned by `1001` end. Dialog cancelled: `cancel` the `LINKS` session, plain `2039` end. Pending parent-object edit; Save remains separate. |
 | `3004` | Delete workflow task | Select `ggvermerke` row by server index; end has empty service parameters, version `0`. Requires edit mode; Save remains separate. |
 | `3005` | Complete task | Select `ggvermerke` row, set `erledigung` |
 | `3007` | Delete references | Select `bezuege`; end sends `messagereturn=1` |
@@ -390,6 +391,7 @@ The parameter list above is illustrative: copy the **entire actual returned list
 | `GGVEDIT` | Parameters returned by command `6154` |
 | `GGVMUSTERVERWALTUNG` | Parameters returned by `3028` |
 | `BEARBEITEN` | Parameters returned by `5020` |
+| `LINKS` | Parameters returned by `2039` |
 | `GGVMUSTERVERWALTUNG` (administration) | Ribbon "Geschäftsgangmuster-Verwaltung": only `mandant` (string, in braces); kept open while the window is open |
 | `GGVMUSTERVERWALTUNG_DETAILS` | New template: parameters returned by `200401`. Existing template: `zeiEnabled="0"` (string), `ggvmusterId` (int), `nutzerauswahl_options=536870976` (int), `nutzerauswahl_mode=299` (int), `mandant` (string), `objektartId` (int) |
 | `NUTZERAUSWAHL` | `mode=299` (int), `options=1610612800` (int), `artFilter` xList of ints 1/2/3 with version 1, empty `artAuswahlBlacklist` entry, tenant string in braces |
