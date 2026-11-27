@@ -662,9 +662,16 @@ class VapiClient:
             context = result.find('changedSessionContext') if result is not None else None
             if context is None:
                 raise ValueError('SOAP-Antwort enthält keine Aufgabenübersicht.')
-            rows = [{column.get('identifier'): column.findtext('value') or ''
-                     for column in row.findall('columns')}
-                    for row in context.findall("complexAttributes[@identifier='trefferelemente']/rows")]
+            rows = []
+            for row in context.findall("complexAttributes[@identifier='trefferelemente']/rows"):
+                task = {column.get('identifier'): column.findtext('value') or '' for column in row.findall('columns')}
+                assignee = row.find("columns[@identifier='erlassen_fuer_id']")
+                if assignee is not None:
+                    task['_assignee_id'] = (assignee.get('idvalue') or assignee.findtext('value') or '').strip()
+                rows.append(task)
+            # Only tasks for the current user; after a Stellvertreterwechsel user_id is the represented user.
+            if self.user_id:
+                rows = [task for task in rows if task.get('_assignee_id', str(self.user_id)) == str(self.user_id)]
             version = result.findtext('serviceParams/version')
             if version is not None:
                 self.tasks_version = int(version)

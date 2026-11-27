@@ -836,8 +836,12 @@ class Client(QMainWindow):
             self.history_list.addItem(item)
 
     def load_my_tasks(self):
-        if self.api is None or self._my_tasks_loading:
+        if self.api is None:
             return
+        if self._my_tasks_loading:
+            self._my_tasks_reload = True  # e.g. a Stellvertreterwechsel during loading
+            return
+        self._my_tasks_reload = False
         self._my_tasks_loading = True
         self.my_tasks_status.setText('Aufgaben werden geladen …')
         self.my_tasks_status.show()
@@ -847,6 +851,9 @@ class Client(QMainWindow):
 
     def my_tasks_finished(self, rows, error):
         self._my_tasks_loading = False
+        if getattr(self, '_my_tasks_reload', False):
+            self.load_my_tasks()
+            return
         if error:
             self.my_tasks_status.setText('Aufgaben konnten nicht geladen werden: ' + error)
             self.my_tasks_status.show()
@@ -855,7 +862,6 @@ class Client(QMainWindow):
         self.my_tasks_status.setText('' if rows else 'Keine Aufgaben vorhanden.')
         self.my_tasks_status.setVisible(not rows)
         self.tasks.clear()
-        root = QTreeWidgetItem(self.tasks, [f'Meine Aufgaben ({len(rows)})'])
         groups = {}
         for task in rows:
             category = 'Wiedervorlagen' if task.get('kategorie_typ') == 'Wiedervorlagen' else 'Geschäftsgangverfügungen'
@@ -870,13 +876,15 @@ class Client(QMainWindow):
                 except ValueError:
                     bucket = due
             if category not in groups:
-                groups[category] = (QTreeWidgetItem(root, [category]), {})
+                groups[category] = (QTreeWidgetItem(self.tasks, [category]), {})
             group, buckets = groups[category]
             if bucket not in buckets:
                 buckets[bucket] = QTreeWidgetItem(group, [bucket])
             parent = buckets[bucket]
             name = task.get('name') or task.get('betreff') or task.get('obj_id', '')
-            item = QTreeWidgetItem(parent, [(task.get('kategorie') or 'Aufgabe') + '\n' + name])
+            # Multi-line Aufgaben are cut to their first line so every item keeps two lines.
+            title = next((line.strip() for line in (task.get('aufgabe') or '').splitlines() if line.strip()), '')
+            item = QTreeWidgetItem(parent, [(title or task.get('kategorie') or 'Aufgabe') + '\n' + name])
             item.setData(0, Qt.ItemDataRole.UserRole, task)
             item.setToolTip(0, f"{name}\n{task.get('aufgabe', '')}\nID: {task.get('obj_id', '')}\nFällig: {due}")
             try:
@@ -1571,6 +1579,8 @@ class Client(QMainWindow):
                 window.user_info_loaded(result['name'])
                 window._my_tasks_loaded = False
                 window.show_tasks([])
+                if window.sidebar_tabs.currentIndex() == 1:
+                    window.load_my_tasks()  # the Aufgaben tree belongs to the previous user
                 window.reload_object_tables()
                 if result['warnings']:
                     window.statusBar().showMessage('Stellvertretung gewechselt. ' + ' '.join(result['warnings']))
@@ -1831,7 +1841,7 @@ class Client(QMainWindow):
         self.update_user_button_tooltip()
         row.addWidget(self.user_button, 1)
         layout.addWidget(user)
-        tabs = QTabBar()
+        tabs = self.sidebar_tabs = QTabBar()
         for title in ('Favoriten', 'Aufgaben', 'Ablagen'):
             tabs.addTab(title)
         layout.addWidget(tabs)
