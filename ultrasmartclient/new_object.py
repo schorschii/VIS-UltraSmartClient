@@ -27,7 +27,7 @@ class NewObjectDialog(QDialog):
         sidebar = QFrame()
         sidebar.setObjectName('newObjectSidebar')
         sidebar.setFixedWidth(170)
-        sidebar.setStyleSheet('#newObjectSidebar { background: #243e60; } QLabel { color: white; }')
+        sidebar.setStyleSheet('#newObjectSidebar { background: #243e60; } QLabel { color: white; background: transparent; }')
         steps = QVBoxLayout(sidebar)
         steps.setContentsMargins(14, 14, 14, 14)
         steps.setSpacing(2)
