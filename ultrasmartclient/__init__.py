@@ -1,7 +1,7 @@
 """VIS UltraSmartClient desktop application."""
 
 APP_NAME = "UltraSmartClient"
-VERSION  = "0.2.0"
+VERSION  = "0.3.0"
 
 import sys
 from pathlib import Path
