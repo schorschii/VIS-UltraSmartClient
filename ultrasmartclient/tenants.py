@@ -293,6 +293,7 @@ class TenantSelector(QDialog):
         self.resize(600, 380)
         layout = QVBoxLayout(self)
         self.tenant_list = QListWidget()
+        self.tenant_list.setProperty('framedList', True)
         layout.addWidget(self.tenant_list)
         form = QFormLayout()
         self.name = QLineEdit()

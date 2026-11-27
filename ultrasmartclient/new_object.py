@@ -67,6 +67,7 @@ class NewObjectDialog(QDialog):
         self.kinds_layout.setContentsMargins(0, 0, 0, 0)
         content.addWidget(self.kinds_widget)
         self.types = QListWidget()
+        self.types.setProperty('framedList', True)
         self.types.itemClicked.connect(self.select_type)
         content.addWidget(self.types, 1)
         self.custom_fields = custom_wizard_fields()

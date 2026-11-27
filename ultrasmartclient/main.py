@@ -16,7 +16,7 @@ if sys.platform == 'win32':
 from PyQt6.QtCore import QLibraryInfo, QLocale, QTimer, QTranslator
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from .gui import Client, LoginStartup, STYLE
+from .gui import Client, LoginStartup, STYLE, settings
 from .tenants import TenantSelector
 from .theme import ThemeManager
 
@@ -38,6 +38,9 @@ def main():
     app.soap_debug = args.debug
     # Keep Qt's platform-selected style for native controls such as scrollbars.
     app.theme_manager = ThemeManager(app)
+    saved_theme = settings().value('appearance/theme', 'system')
+    if saved_theme in ('light', 'dark'):
+        app.theme_manager.set_mode(saved_theme)
     app.setStyleSheet(STYLE)
     if not args.smoke_test and not args.demo:
         app.setQuitOnLastWindowClosed(False)

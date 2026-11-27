@@ -50,7 +50,7 @@ class FileTemplateDialog(QDialog):
         self.templates = QTreeWidget()
         self.templates.setRootIsDecorated(False)
         self.templates.setUniformRowHeights(True)
-        self.templates.setAlternatingRowColors(True)
+        self.templates.setProperty('framedList', True)
         self.templates.setHeaderHidden(True)
         self.templates.currentItemChanged.connect(self.template_selected)
         layout.addWidget(self.templates, 1)

@@ -176,6 +176,7 @@ class WorkflowTemplateDialog(QDialog):
         heading.addWidget(self.search)
         layout.addLayout(heading)
         self.templates = QListWidget()
+        self.templates.setProperty('framedList', True)
         collator = QCollator()
         collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         collator.setNumericMode(True)

@@ -67,7 +67,7 @@ class WorkflowTemplateManagementDialog(QDialog):
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.tree.setColumnWidth(1, 36)
-        self.tree.setStyleSheet('QTreeWidget { border: 1px solid palette(midlight); background: palette(base); }')
+        self.tree.setProperty('framedList', True)
         self.tree.itemDoubleClicked.connect(self.edit_template)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.template_context_menu)

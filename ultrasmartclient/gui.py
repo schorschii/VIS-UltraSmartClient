@@ -631,6 +631,7 @@ class Client(QMainWindow):
         search_layout.addWidget(self.search_status)
         self.search_results = QListWidget()
         self.search_results.setObjectName('searchResults')
+        self.search_results.setProperty('framedList', True)
         self.search_results.setMouseTracking(True)
         self.search_results.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.search_results.itemClicked.connect(self.open_search_result)
@@ -644,8 +645,7 @@ class Client(QMainWindow):
         for label, mode in [('System', 'system'), ('Hell', 'light'), ('Dunkel', 'dark')]:
             self.theme_selector.addItem(label, mode)
         self.theme_selector.setCurrentIndex(self.theme_selector.findData(self.theme.mode))
-        self.theme_selector.currentIndexChanged.connect(
-            lambda _: self.theme.set_mode(self.theme_selector.currentData()))
+        self.theme_selector.currentIndexChanged.connect(self.theme_selected)
         row.addWidget(self.theme_selector)
         layout.addWidget(top)
         self.ribbon = QStackedWidget()
@@ -834,6 +834,13 @@ class Client(QMainWindow):
             item.setToolTip(f"{entry['name']}\nID: {entry['id']}")
             item.setData(Qt.ItemDataRole.UserRole, entry)
             self.history_list.addItem(item)
+
+    def theme_selected(self, _index=None):
+        mode = self.theme_selector.currentData()
+        if mode is None or mode == self.theme.mode:
+            return
+        self.theme.set_mode(mode)
+        settings().setValue('appearance/theme', mode)
 
     def load_my_tasks(self):
         if self.api is None:
@@ -1784,7 +1791,8 @@ class Client(QMainWindow):
                 row.addWidget(group)
                 if group_index < len(page_groups) - 1:  # separators only between groups
                     line = QFrame()
-                    line.setFrameShape(QFrame.Shape.VLine)
+                    line.setObjectName('ribbonSeparator')
+                    line.setFixedWidth(1)
                     row.addWidget(line)
             row.addStretch()
             scroll = QScrollArea()
@@ -3064,12 +3072,14 @@ QPushButton#propertyAction:disabled { background: palette(mid); color: palette(p
 QDialogButtonBox QPushButton { min-height: 20px; text-align: center; }
 QPushButton#section { background: palette(alternate-base); border: none; border-top: 1px solid palette(mid); border-bottom: 1px solid palette(mid); min-height: 19px; padding: 4px 7px; }
 QTreeWidget, QListWidget { border: none; outline: none; }
+QTreeWidget[framedList="true"], QListWidget[framedList="true"] { border: 1px solid palette(midlight); background: palette(base); }
 QListWidget#searchResults::item:hover { background: palette(highlight); color: palette(highlighted-text); }
 QTreeWidget::item, QListWidget::item { min-height: 30px; }
 QTreeWidget::item:selected, QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
 QTableWidget, QTableWidget > QWidget { background: palette(base); border: none; }
 QHeaderView::section { background: palette(base); color: palette(placeholder-text); border: none; border-right: 1px solid palette(mid); border-bottom: 1px solid palette(mid); padding: 5px; }
 QSplitter::handle { background: palette(mid); width: 1px; height: 1px; }
+QFrame#ribbonSeparator { background: palette(mid); border: none; }
 QScrollArea { border: none; }
 /* Leave scrollbars unstyled so Qt draws them with the native platform style. */
 QScrollBar { background: none; }
