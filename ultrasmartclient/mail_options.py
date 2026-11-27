@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QLabel, QVBoxLayout, QWidget,
 )
 
-from .gui import Section
+from . import gui
 from .user_selection import TreeRequest
 
 # (section title, [(checkbox label, user property name)])
@@ -51,7 +51,7 @@ class MailOptionsDialog(QDialog):
                 checkbox.toggled.connect(lambda checked, name=name: self.option_toggled(name, checked))
                 options_layout.addWidget(checkbox)
                 self.checkboxes[name] = checkbox
-            layout.addWidget(Section(title, content))
+            layout.addWidget(gui.Section(title, content))
         layout.addStretch()
         self.status = QLabel('Einstellungen werden geladen …')
         self.status.setWordWrap(True)

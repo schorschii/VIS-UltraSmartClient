@@ -2218,10 +2218,6 @@ class Client(QMainWindow):
                 ('Öffnen', [
                     ('In neuem\nFenster', 'window', 'ribbon-new-window.svg'),
                     ('Lesen', None, 'ribbon-read.svg')
-                ]),
-                ('VIS.SAX', [
-                    ('Internes Schreiben\nerzeugen', None, 'ribbon-compose.svg'),
-                    ('Veröffentlichen', None, 'ribbon-publish.svg')
                 ])
             ],
             [
@@ -2246,7 +2242,7 @@ class Client(QMainWindow):
         ]
         for page_groups in groups:
             page, row = box(True, 3)
-            for title, actions in page_groups:
+            for group_index, (title, actions) in enumerate(page_groups):
                 group, column = box(False, 2)
                 buttons, buttons_row = box(True)
                 for name, action, icon_file in actions:
@@ -2269,9 +2265,10 @@ class Client(QMainWindow):
                 caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 column.addWidget(caption)
                 row.addWidget(group)
-                line = QFrame()
-                line.setFrameShape(QFrame.Shape.VLine)
-                row.addWidget(line)
+                if group_index < len(page_groups) - 1:  # separators only between groups
+                    line = QFrame()
+                    line.setFrameShape(QFrame.Shape.VLine)
+                    row.addWidget(line)
             row.addStretch()
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)

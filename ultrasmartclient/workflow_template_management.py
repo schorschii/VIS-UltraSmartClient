@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout,
 )
 
-from .gui import ICON_DIR, OptionalDateEdit, object_icon
+from . import gui
 from .user_selection import TreeRequest, UserSelectionDialog
 
 # ID of the selected Kategorie on the task table's Kategorie cells.
@@ -125,10 +125,10 @@ class WorkflowTemplateManagementDialog(QDialog):
         known = dict(self.state['kinds']) if self.state else {}
         known.update({kind: f'Objektart {kind}' for kind in by_kind if kind not in known})
         categories = sorted(known.items())
-        template_icon = QIcon(str(ICON_DIR / 'ribbon-workflow-template.svg'))
+        template_icon = QIcon(str(gui.ICON_DIR / 'ribbon-workflow-template.svg'))
         for kind, title in categories:
             category = QTreeWidgetItem(self.tree, [title])
-            category.setIcon(0, object_icon(kind))
+            category.setIcon(0, gui.object_icon(kind))
             category.setData(0, Qt.ItemDataRole.UserRole, kind)
             category.setFlags(Qt.ItemFlag.ItemIsEnabled)
             add = QToolButton()
@@ -349,7 +349,7 @@ class WorkflowTemplateEditorDialog(QDialog):
         dialog_buttons.rejected.connect(self.reject)
         buttons.addWidget(dialog_buttons)
         app = QApplication.instance()
-        icons = ICON_DIR / 'dark' if getattr(getattr(app, 'theme_manager', None), 'dark', False) else ICON_DIR
+        icons = gui.ICON_DIR / 'dark' if getattr(getattr(app, 'theme_manager', None), 'dark', False) else gui.ICON_DIR
         self.add_task.setIcon(QIcon(str(icons / 'ribbon-new-task.svg')))
         # Same standard icons as the OK/Cancel buttons of the user selection dialog.
         self.save_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOkButton))
@@ -618,7 +618,7 @@ class TemplateTaskDialog(QDialog):
             return field
         self.aufgabe = QPlainTextEdit(values.get('aufgabe', ''))
         self.aufgabe.setMinimumHeight(80)
-        self.termin = OptionalDateEdit()
+        self.termin = gui.OptionalDateEdit()
         self.termin.setObjectName('workflowDue')
         self.termin.setDisplayFormat('dd.MM.yyyy')
         self.termin.setCalendarPopup(True)
